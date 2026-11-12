@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh ISPbandits Dev TLS certificate material
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=ispbandits-tls-refresh.service
+
+[Install]
+WantedBy=timers.target

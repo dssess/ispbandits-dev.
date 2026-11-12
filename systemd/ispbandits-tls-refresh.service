@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh ISPbandits Dev Xray TLS certificate material
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ispbandits-dev-refresh-tls

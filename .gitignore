@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# Local/runtime data (never commit VPS customer state)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+*.tar.gz
+.env
+.env.*
+!.env.example
+
+# Deployment credentials and generated service configuration
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+xray.json
+*.log
+logs/
+
+# Build outputs
+build/
+dist/

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily ISPbandits Dev account expiry reconciliation
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+Persistent=true
+Unit=ispbandits-expire.service
+
+[Install]
+WantedBy=timers.target

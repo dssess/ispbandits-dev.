@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect ISPbandits Dev Xray traffic each minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=ispbandits-collect.service
+
+[Install]
+WantedBy=timers.target

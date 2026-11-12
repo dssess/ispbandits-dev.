@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified VPN Platform — Architecture</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #09111f;
+    --panel: #111d30;
+    --panel2: #15243a;
+    --line: #2a3c56;
+    --text: #eef4fb;
+    --muted: #b2c2d6;
+    --ssh: #55d6c2;
+    --xray: #bd9aff;
+    --data: #86db9d;
+    --gold: #f1c66a;
+    --blue: #72b8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+  body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--text); }
+  main {
+    width: 600px;
+    margin: 0 auto;
+    padding: 22px 24px 20px;
+    background: radial-gradient(ellipse at 50% 0%, #152640 0%, var(--bg) 63%);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .hero { text-align: center; padding: 4px 4px 7px; }
+  .eyebrow { color: var(--ssh); font-size: 10px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; }
+  h1 { margin: 5px 0 4px; font-size: 25px; line-height: 1.08; letter-spacing: -.45px; }
+  .subtitle { color: var(--muted); font-size: 11px; line-height: 1.35; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .card-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; font-size: 12px; font-weight: 800; letter-spacing: .25px; }
+  .num { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; flex: 0 0 20px; font-size: 10px; background: #263a56; color: var(--text); }
+  .body { font-size: 10.5px; line-height: 1.35; color: var(--muted); }
+  .body b { color: var(--text); font-weight: 700; }
+  .arrow { height: 10px; text-align: center; color: #7790ae; font-size: 15px; line-height: 10px; }
+  .foundation { border-color: #46618a; background: linear-gradient(110deg, #15253d, #111d30); }
+  .foundation .card-head { color: var(--blue); }
+  .section-label { color: #91a8c5; font-size: 9px; font-weight: 800; letter-spacing: 1.3px; margin: 0 1px -3px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ssh { border-color: #267f79; background: linear-gradient(145deg, #12343a, #10212e); }
+  .ssh .card-head, .ssh .num { color: var(--ssh); }
+  .xray { border-color: #654d93; background: linear-gradient(145deg, #302347, #171d30); }
+  .xray .card-head, .xray .num { color: var(--xray); }
+  .service-title { font-size: 11px; font-weight: 800; margin-bottom: 3px; }
+  .account { border-color: #346894; background: linear-gradient(110deg, #142d47, #111d30); }
+  .account .card-head { color: var(--blue); }
+  .mapping { text-align: center; color: #adc1db; font-size: 9px; padding-top: 5px; }
+  .meter { padding: 8px 9px; min-height: 57px; }
+  .meter .service-title { font-size: 10px; }
+  .meter .body { font-size: 9.5px; }
+  .meter.ssh { border-color: #267f79; }
+  .meter.xray { border-color: #654d93; }
+  .collector { border-color: #397b55; background: linear-gradient(110deg, #15392f, #11242d); }
+  .collector .card-head { color: var(--data); }
+  .store { border-color: #547092; background: #14243a; }
+  .store .card-head { color: #d5e3f6; }
+  .dashboard { border-color: #397b55; background: linear-gradient(110deg, #17392f, #142a31); }
+  .dashboard .card-head { color: var(--data); }
+  .note { border-color: #7b6532; background: #2b261a; }
+  .note .card-head { color: var(--gold); }
+  .notes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .note .body { font-size: 9px; }
+  .release { border: 1px solid #7b6532; border-radius: 12px; padding: 9px 11px; background: #242219; }
+  .release .card-head { color: var(--gold); margin-bottom: 3px; }
+  .footer { color: #8195ae; text-align: center; font-size: 8.5px; padding-top: 1px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div class="eyebrow">Fresh-server architecture</div>
+    <h1>ONE VPS · MULTI-PROTOCOL VPN</h1>
+    <div class="subtitle">SSH + Trojan + VLESS · VMess optional · one account and usage system</div>
+  </header>
+
+  <section class="card foundation">
+    <div class="card-head"><span class="num">1</span> SAFE, CROSS-DISTRO FOUNDATION</div>
+    <div class="body"><b>Ubuntu 22.04 · Ubuntu 24.04 · Debian*</b><br>Detect OS · check dependencies and port conflicts · preserve admin SSH · firewall · trusted TLS</div>
+  </section>
+
+  <div class="arrow">↓</div>
+  <div class="section-label">2 · CLIENT ACCESS — ROUTES STAY SEPARATE</div>
+  <section class="cols">
+    <div class="card ssh">
+      <div class="service-title">SSH ACCESS</div>
+      <div class="body"><b>OpenSSH customer sessions</b><br>Direct TCP 22<br>Optional WebSocket / TLS-wrapped SSH<br><span style="color:#8edfd2">Admin SSH stays separate</span></div>
+    </div>
+    <div class="card xray">
+      <div class="service-title">XRAY PROXY ACCESS</div>
+      <div class="body"><b>Trojan · VLESS</b><br>VMess optional<br>Dedicated listeners; no accidental port overlap</div>
+    </div>
+  </section>
+
+  <div class="arrow">↓</div>
+  <section class="card account">
+    <div class="card-head"><span class="num">3</span> ONE ACCOUNT CONTROL PLANE</div>
+    <div class="body"><b>Admin menu / API → account service</b><br>Create · renew · disable once; map one identity to SSH and Xray credentials. Store expiry, device limit, status, and optional quota policy.</div>
+    <div class="mapping">One account record governs both protocol paths</div>
+  </section>
+
+  <div class="arrow">↓</div>
+  <div class="section-label">4 · PER-ACCOUNT MEASUREMENT</div>
+  <section class="cols">
+    <div class="card meter ssh">
+      <div class="service-title">SSH METER</div>
+      <div class="body">Account-level traffic counter<br>Validate against known transfers</div>
+    </div>
+    <div class="card meter xray">
+      <div class="service-title">XRAY COUNTERS</div>
+      <div class="body">Per-user Trojan / VLESS bytes<br>VMess if enabled</div>
+    </div>
+  </section>
+  <div class="arrow">↓</div>
+  <section class="card collector">
+    <div class="card-head">USAGE COLLECTOR</div>
+    <div class="body">Normalize <b>upload + download</b> counters · persist through restarts · keep lifetime totals separate from quota windows</div>
+  </section>
+  <div class="arrow">↓</div>
+  <section class="card store">
+    <div class="card-head">PERSISTENT ACCOUNT + USAGE STORE</div>
+    <div class="body">Protocol mappings · per-user bytes · expiry · status · optional quota — credentials protected, never printed in logs</div>
+  </section>
+  <div class="arrow">↓</div>
+  <section class="card dashboard">
+    <div class="card-head">MONITORING MENU / DASHBOARD</div>
+    <div class="body"><b>Per user:</b> upload · download · total · expiry · active sessions · quota status<br>Enable automatic quota enforcement only after measurement tests pass.</div>
+  </section>
+
+  <section class="notes-grid">
+    <div class="card note">
+      <div class="card-head">DOMAIN + DNS</div>
+      <div class="body">Primary A record + trusted certificate for TLS. NS delegation only if SlowDNS is added.</div>
+    </div>
+    <div class="card note">
+      <div class="card-head">SAFE OPERATIONS</div>
+      <div class="body">No package purges. Validate configs before restart. Keep rollback and admin access.</div>
+    </div>
+  </section>
+
+  <section class="release">
+    <div class="card-head"><span class="num">5</span> RELEASE GATE — TEST CLEAN VMs</div>
+    <div class="body">Ubuntu 22 · Ubuntu 24 · Debian target: verify SSH + Xray login, known-byte transfers, counter persistence after restart, port conflicts, and rollback.</div>
+  </section>
+  <div class="footer">* Debian support is confirmed only after clean-install and protocol tests.</div>
+</main>
+</body>
+</html>

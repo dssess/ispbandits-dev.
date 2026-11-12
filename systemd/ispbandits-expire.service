@@ -1,0 +1,7 @@
+[Unit]
+Description=Expire ISPbandits Dev accounts and reconcile active services
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ispbandits expire

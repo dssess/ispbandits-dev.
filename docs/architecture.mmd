@@ -1,0 +1,62 @@
+%%{init: {"theme":"dark","flowchart":{"curve":"basis","nodeSpacing":24,"rankSpacing":34,"htmlLabels":true},"themeVariables":{"fontFamily":"Inter, Arial, sans-serif","fontSize":"17px","background":"#0A1020","primaryColor":"#17243A","primaryTextColor":"#F3F7FC","primaryBorderColor":"#526A8A","lineColor":"#93A8C2","clusterBkg":"#111B2D","clusterBorder":"#33445E","tertiaryColor":"#111B2D"}}}%%
+flowchart TB
+    T["UNIFIED VPN PLATFORM<br/><b>ONE VPS · SSH + TROJAN + VLESS</b><br/>VMess optional"]
+    T --> VPS["FRESH VPS<br/>Ubuntu 22.04 · Ubuntu 24.04 · Debian*"]
+    VPS --> PRE["1 · SAFE PREFLIGHT + INSTALL<br/>Detect OS · verify dependencies and ports<br/>protect admin access · firewall · trusted TLS"]
+
+    subgraph ACCESS["2 · CLIENT DATA PLANE — SEPARATE ROUTES"]
+      direction LR
+      SSHCLIENT["SSH CLIENT"] --> SSHGATE["SSH GATEWAY<br/>Direct OpenSSH :22<br/>Optional WebSocket / TLS SSH"] --> OPENSSH["OpenSSH<br/>Customer sessions"]
+      PROXYCLIENT["PROXY CLIENT"] --> XRAY["Xray<br/>Trojan · VLESS<br/>VMess optional"]
+    end
+    PRE --> SSHGATE
+    PRE --> XRAY
+
+    subgraph CONTROL["3 · ONE ACCOUNT CONTROL PLANE"]
+      direction LR
+      ADMIN["Admin menu / API"] --> MANAGER["Account service<br/>Create · renew · disable<br/>Expiry · device limit · quota policy"] --> DB[("Persistent account + usage store<br/>Protocol mappings · upload/download bytes<br/>expiry · status · optional quota")]
+    end
+    PRE --> ADMIN
+    MANAGER -.-> OPENSSH
+    MANAGER -.-> XRAY
+
+    subgraph METERING["4 · PER-ACCOUNT USAGE + MONITORING"]
+      direction LR
+      SSHMETER["SSH meter<br/>Account-level traffic"]
+      XRAYMETER["Xray counters<br/>Per-user traffic"]
+      COLLECTOR["Usage collector<br/>Normalize upload + download<br/>Persist across restarts"]
+      DASH["Menu / dashboard<br/>Per user: upload · download · total<br/>expiry · sessions · quota status"]
+    end
+    OPENSSH --> SSHMETER
+    XRAY --> XRAYMETER
+    SSHMETER --> COLLECTOR
+    XRAYMETER --> COLLECTOR
+    COLLECTOR --> DB
+    DB --> DASH
+
+    DNS["DOMAIN + DNS<br/>Primary A record + trusted TLS cert<br/>NS delegation only for optional SlowDNS"]
+    PRE -.-> DNS
+    DNS -.-> SSHGATE
+
+    QA["5 · RELEASE GATE<br/>Clean-VM tests: Ubuntu 22 · Ubuntu 24 · Debian target<br/>Test SSH + Xray login, known-byte transfers,<br/>restart persistence, rollback, and port conflicts"]
+    DASH --> QA
+
+    classDef title fill:#101A2B,stroke:#56C2B5,stroke-width:2px,color:#F3F7FC,font-size:22px,font-weight:bold;
+    classDef foundation fill:#1A2B45,stroke:#6D8BB5,stroke-width:2px,color:#F3F7FC;
+    classDef ssh fill:#123C42,stroke:#42B9A8,stroke-width:2px,color:#EAFBF8;
+    classDef xray fill:#33224C,stroke:#B49AE8,stroke-width:2px,color:#F6F0FF;
+    classDef control fill:#183653,stroke:#66A8D9,stroke-width:2px,color:#F0F7FF;
+    classDef metering fill:#203C36,stroke:#76C69C,stroke-width:2px,color:#EEFFF4;
+    classDef storage fill:#26344C,stroke:#AFC3E1,stroke-width:2px,color:#F4F7FC;
+    classDef note fill:#3B3420,stroke:#D8B85B,stroke-width:2px,color:#FFF8E5;
+    class T title;
+    class VPS,PRE foundation;
+    class SSHCLIENT,SSHGATE,OPENSSH ssh;
+    class PROXYCLIENT,XRAY xray;
+    class ADMIN,MANAGER control;
+    class SSHMETER,XRAYMETER,COLLECTOR metering;
+    class DB,DASH storage;
+    class DNS,QA note;
+    style ACCESS fill:#111B2D,stroke:#425977,stroke-width:1px
+    style CONTROL fill:#111B2D,stroke:#425977,stroke-width:1px
+    style METERING fill:#111B2D,stroke:#425977,stroke-width:1px

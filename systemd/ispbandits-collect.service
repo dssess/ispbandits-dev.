@@ -1,0 +1,7 @@
+[Unit]
+Description=Collect ISPbandits Dev Xray per-user traffic counters
+After=ispbandits-xray.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ispbandits collect --xray-only
