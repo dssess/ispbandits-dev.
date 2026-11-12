@@ -4,6 +4,13 @@
 **Publisher:** ISPbandits Dev
 **License:** Proprietary (`LICENSE.proprietary`)
 
+<p align="center">
+  <img src="assets/ispbandits-breathing-banner.gif" alt="A cyan and amber network loop softly breathing against a deep navy background" width="100%" />
+</p>
+
+<p align="center"><strong>One control plane. A steady pulse.</strong><br />
+SSH · VLESS · Trojan · SQLite</p>
+
 ISPbandits Dev is an early single-VPS management alpha combining Linux SSH account provisioning with Xray VLESS and Trojan identities, SQLite account records, Xray traffic collection, approximate SSH online-process visibility, backups, and expiry processing.
 
 > **Alpha warning:** This software has not yet been validated through a complete live client connection on a production VPS. SSH per-user network-byte metering and quota enforcement are not implemented. Xray collection is enabled in Xray-only mode; do not treat reported SSH usage as measured. Deploy only to a fresh, disposable VPS for testing, not to an existing production server.
