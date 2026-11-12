@@ -18,6 +18,7 @@ ISPbandits Dev is an early single-VPS management alpha combining Linux SSH accou
 ## Contents
 
 - [Requirements](#requirements)
+- [Quick install (fresh VPS)](#quick-install-fresh-vps)
 - [Get the source](#get-the-source)
 - [Pre-install checks](#pre-install-checks)
 - [Install](#install)
@@ -34,20 +35,34 @@ For the full install, use a **fresh** Ubuntu 22.04/24.04 or Debian 12/13 VPS wit
 Before full installation:
 
 1. Point the chosen hostname's DNS A/AAAA records at the VPS.
-2. Obtain a TLS certificate and matching private key covering that hostname. The certificate and key must already exist on the VPS.
+2. For manual installation, have a TLS certificate and matching private key covering that hostname. The quick installer can obtain a Let's Encrypt certificate for you.
 3. Ensure TCP ports **443** and **8443** are free. The local Xray API uses loopback port **10085** and should not be exposed publicly.
-4. Plan to allow inbound TCP 443 and 8443 in the provider/VPS firewall after installation. The installer does not change cloud firewall rules.
+4. Allow inbound TCP 443 and 8443 in the provider/VPS firewall. The quick install's Let's Encrypt option also requires inbound TCP 80 for certificate issuance and renewal. The installer does not change cloud firewall rules.
 
 The full installer does not change administrator SSH configuration or install/reconfigure OpenSSH/Dropbear. SSH accounts created by the manager rely on the server's existing SSH service.
 
-## Get the source
+## Quick install (fresh VPS)
 
-This repository is private; you need repository access and a configured GitHub SSH key to clone it. The GitHub repository name ends with a period, so the clone URL contains two periods before `.git`:
+For a guided full installation, run this on the **fresh VPS**. Review the script before executing it:
 
 ```bash
-git clone git@github.com:dssess/ispbandits-dev..git
+curl -fsSL https://raw.githubusercontent.com/dssess/ispbandits-dev./main/quick-install.sh -o quick-install.sh && less quick-install.sh && sudo bash quick-install.sh
+```
+
+The script asks for the hostname and TLS choice, installs prerequisites, downloads the project, and calls the existing checked full installer. The default Let's Encrypt path needs DNS already pointed at the VPS and TCP 80 reachable. You can instead supply existing certificate files or explicitly select a self-signed certificate for testing only. It pauses for a typed `YES` before changing the server. Do not run it on an existing NevermoreSSH or Nginx Bandit VPS.
+
+If you already cloned the project, run `sudo bash quick-install.sh` from the checkout; it will reuse those local files rather than downloading the source again.
+
+## Get the source
+
+The GitHub repository name ends with a period, so the clone URL contains two periods before `.git`:
+
+```bash
+git clone https://github.com/dssess/ispbandits-dev..git
 cd ispbandits-dev.
 ```
+
+The repository is publicly readable; that visibility does not change the proprietary license or grant permission to reuse or redistribute the software.
 
 If you received a source archive instead, verify its supplied SHA-256 checksum before extracting, then change to the extracted project directory. Do not copy a live database, credentials, TLS private key, or backup archive into the source tree.
 
