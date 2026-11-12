@@ -1,58 +1,198 @@
 # ISPbandits Dev — Unified VPS Manager
 
-**Version:** 0.1.0-alpha · **Owner:** ISPbandits Dev · **License:** proprietary
+**Version:** 0.1.0-alpha
+**Publisher:** ISPbandits Dev
+**License:** Proprietary (`LICENSE.proprietary`)
 
-Version 1 is being built as a clean, GitHub-ready project for a fresh single VPS. The intended system combines SSH/Dropbear account management with Xray Trojan and VLESS (VMess optional), per-account usage, online SSH visibility, and consistent backup/restore. The code includes the compatible SQLite schema, database backup/restore, an on-demand approximate SSH/Dropbear process view, coordinated system-account and Xray-credential creation, automatic expiry reconciliation, and a TLS VLESS/Trojan config generator. The full installer now has an explicit Xray deployment path. The generated config passed local validation with the official Xray binary, but no live protocol connection or target VPS has been validated, and SSH per-user byte metering is still missing.
+ISPbandits Dev is an early single-VPS management alpha combining Linux SSH account provisioning with Xray VLESS and Trojan identities, SQLite account records, Xray traffic collection, approximate SSH online-process visibility, backups, and expiry processing.
 
-## Safe local development
+> **Alpha warning:** This software has not yet been validated through a complete live client connection on a production VPS. SSH per-user network-byte metering and quota enforcement are not implemented. Xray collection is enabled in Xray-only mode; do not treat reported SSH usage as measured. Deploy only to a fresh, disposable VPS for testing, not to an existing production server.
 
-Requires Python 3.10+ and SQLite support in Python. No third-party runtime dependencies are required.
+## Contents
+
+- [Requirements](#requirements)
+- [Get the source](#get-the-source)
+- [Pre-install checks](#pre-install-checks)
+- [Install](#install)
+- [Create accounts](#create-accounts)
+- [Monitor and manage](#monitor-and-manage)
+- [Back up and restore](#back-up-and-restore)
+- [Development and tests](#development-and-tests)
+- [Current limitations](#current-limitations)
+
+## Requirements
+
+For the full install, use a **fresh** Ubuntu 22.04/24.04 or Debian 12/13 VPS with systemd, root/sudo access, and internet access. The installer recognizes these releases, but clean-install and client-connectivity testing on every target is still a release gate.
+
+Before full installation:
+
+1. Point the chosen hostname's DNS A/AAAA records at the VPS.
+2. Obtain a TLS certificate and matching private key covering that hostname. The certificate and key must already exist on the VPS.
+3. Ensure TCP ports **443** and **8443** are free. The local Xray API uses loopback port **10085** and should not be exposed publicly.
+4. Plan to allow inbound TCP 443 and 8443 in the provider/VPS firewall after installation. The installer does not change cloud firewall rules.
+
+The full installer does not change administrator SSH configuration or install/reconfigure OpenSSH/Dropbear. SSH accounts created by the manager rely on the server's existing SSH service.
+
+## Get the source
+
+This repository is private; you need repository access and a configured GitHub SSH key to clone it. The GitHub repository name ends with a period, so the clone URL contains two periods before `.git`:
+
+```bash
+git clone git@github.com:dssess/ispbandits-dev..git
+cd ispbandits-dev.
+```
+
+If you received a source archive instead, verify its supplied SHA-256 checksum before extracting, then change to the extracted project directory. Do not copy a live database, credentials, TLS private key, or backup archive into the source tree.
+
+## Pre-install checks
+
+Review the installer and run its non-mutating checks first:
+
+```bash
+less install.sh
+./install.sh --check
+```
+
+`--check` runs syntax, compilation, and unit checks without installing system files. The installer rejects unknown OS releases, occupied service ports, mismatched certificate/key pairs, and existing managed service state rather than replacing it.
+
+## Install
+
+### Full Xray server (fresh VPS)
+
+Use the full mode only after DNS and TLS are ready. Replace the example hostname and paths with your own:
+
+```bash
+sudo ./install.sh --full \
+  --domain vpn.example.com \
+  --cert-file /etc/letsencrypt/live/vpn.example.com/fullchain.pem \
+  --key-file /etc/letsencrypt/live/vpn.example.com/privkey.pem
+```
+
+The installer installs the pinned Xray release with checksum verification (amd64/arm64), creates a dedicated unprivileged Xray service, and configures:
+
+- VLESS over TLS on TCP 443.
+- Trojan over TLS on TCP 8443.
+- Xray StatsService on loopback only at 127.0.0.1:10085.
+- A TLS refresh timer, daily account-expiry reconciliation, and once-per-minute Xray-only traffic collection.
+
+After install, open TCP **443** and **8443** in the cloud/provider firewall if required. Do not open port 10085 to the internet. Use `--self-signed` only for a temporary connectivity test; self-signed TLS is not suitable for production clients.
+
+The full installer is for a fresh VPS only. It intentionally refuses full-mode in-place upgrades. Do not run it on the previously inspected NevermoreSSH or Nginx Bandit servers.
+
+### Foundation-only install
+
+For development or database/CLI testing without deploying Xray services:
+
+```bash
+sudo ./install.sh --foundation-only
+```
+
+This installs the package and initializes a root-protected database, but does not create a working VLESS/Trojan server. The default database is `/var/lib/ispbandits-dev/database.db`; application files are installed under `/opt/ispbandits-dev`.
+
+## Create accounts
+
+Administrative commands on an installed server require root; use `sudo`. Account creation takes a username and required expiry date (`YYYY-MM-DD`). The default protocol set is OpenSSH, VLESS, and Trojan:
+
+```bash
+sudo ispbandits account-create alice --expires 2027-01-01
+```
+
+The command creates a no-home Linux SSH account and distinct VLESS/Trojan credentials. It prints generated passwords/secrets once; save them securely. Never put them in a ticket, public issue, repository, or shell script. When the managed Xray service is active, new Xray identities are applied to its validated config; otherwise they are stored but will not accept connections until Xray is installed and activated.
+
+Choose protocols explicitly when needed:
+
+```bash
+# Xray protocols only; no Linux SSH account
+sudo ispbandits account-create xrayonly --expires 2027-01-01 --protocols vless trojan
+
+# SSH only
+sudo ispbandits account-create sshonly --expires 2027-01-01 --protocols openssh
+```
+
+Supported `--protocols` values are `openssh`, `dropbear`, `vless`, and `trojan`. Creating a Dropbear account does not install or configure Dropbear. This alpha does not yet provide complete renew/disable/delete workflows.
+
+## Monitor and manage
+
+```bash
+# Show account-level usage totals. On a full install, Xray usage is collected;
+# SSH bytes are not currently metered.
+sudo ispbandits usage
+
+# Show observed SSH/Dropbear daemon processes for managed accounts.
+# This is approximate and is not a count of unique devices.
+sudo ispbandits online
+
+# Run due-account expiry reconciliation now (also scheduled daily).
+sudo ispbandits expire
+
+# Validate database integrity.
+sudo ispbandits verify
+
+# Show publisher/build information.
+sudo ispbandits about
+```
+
+On a full installation, expired accounts are marked expired, Linux SSH passwords are locked and their processes terminated, and expired Xray identities are removed from the generated configuration. If Xray config reconciliation fails, the service is stopped fail-closed. Automatic quota enforcement is disabled.
+
+The Xray traffic collector runs every minute in Xray-only mode. To run it manually:
+
+```bash
+sudo ispbandits collect --xray-only
+```
+
+## Back up and restore
+
+Create a protected SQLite backup archive:
+
+```bash
+sudo ispbandits backup --dir /var/backups/ispbandits-dev
+```
+
+Restore from a previously created archive (the current database is backed up first when it exists):
+
+```bash
+sudo ispbandits restore /var/backups/ispbandits-dev/ispbandits-YYYYMMDDTHHMMSSZ.tar.gz \
+  --dir /var/backups/ispbandits-dev
+```
+
+Keep backup files private: they contain account records and protocol credentials. The archive includes a checksum manifest and is written with restrictive permissions. This alpha's backup covers the SQLite database; it is **not** a complete system snapshot of service config, certificates, or OS accounts.
+
+## Development and tests
+
+Requires Python 3.10+ with SQLite support. The application has no third-party runtime dependencies for local development.
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 PYTHONPATH=src python -m ispbandits --db ./dev.db init
 PYTHONPATH=src python -m ispbandits --db ./dev.db user-add demo --expires 2027-01-01
-PYTHONPATH=src python -m ispbandits --db ./dev.db link-protocol demo vless demo-vless@example.invalid
 PYTHONPATH=src python -m ispbandits --db ./dev.db usage
 PYTHONPATH=src python -m ispbandits --db ./dev.db backup --dir ./backups
 PYTHONPATH=src python -m ispbandits --db ./dev.db verify
 ```
 
-The legacy `link-protocol` command stores an external identifier only. `account-create` generates and stores VLESS/Trojan credentials in the root-only SQLite database and prints them once; protect the database and any generated Xray config as secrets. Never commit a real VPS database, backup archive, credentials, keys, or `.env` file.
-
-Run tests with:
+`user-add` creates only a database record; it does not provision a Linux or Xray identity. Run the test suite and syntax checks with:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
+python3 -m compileall -q src tests
+bash -n install.sh scripts/refresh-tls.sh
+./install.sh --check
 ```
 
-## Installer
+GitHub Actions runs these checks on Python 3.10–3.13 for pushes, pull requests, and manual dispatch. CI does not deploy to a VPS.
 
-The checked-in `install.sh` accepts Ubuntu 22.04/24.04 and Debian 12/13. `--foundation-only` installs the local SQLite/CLI alpha without services. `--full` additionally installs the pinned Xray 26.10.31 release (SHA-256 checked for amd64/arm64), creates a dedicated unprivileged service, deploys VLESS TCP 443 and Trojan TCP 8443, enables a loopback-only StatsService API, sets up TLS refresh, daily expiry, and once-per-minute **Xray-only usage** timers, and adds the copyright MOTD notice. The Xray binary is fetched only in `--full` mode from the official XTLS/Xray-core release URL; the digest is pinned. No cloud firewall or admin SSH settings are changed. VMess and per-user SSH byte metering are not included in this alpha.
+## Current limitations
 
-For a clean disposable VPS with DNS already pointing at it and a valid certificate/key pair, review the installer and run `sudo ./install.sh --full --domain vpn.example.com --cert-file /path/fullchain.pem --key-file /path/privkey.pem`. The explicit `--self-signed` option is for connectivity tests only; it does not provide production server authentication. Use `sudo ./install.sh --foundation-only` for development-only deployment and `./install.sh --check` for source checks without system changes. `--upgrade` only supports the foundation installation; it deliberately refuses a live full-proxy upgrade until service-aware rollback is implemented. Unknown databases and existing CLI/config paths are refused rather than overwritten. Do not use the existing production VPSes as test hosts.
+- SSH per-user network-byte metering is not implemented; `usage` cannot report truthful SSH network traffic.
+- Bandwidth quotas are not enforced.
+- VMess is not included; supported Xray protocols are VLESS and Trojan.
+- The online SSH view reports approximate process observations, not unique users/devices or guaranteed sessions.
+- Full deployment, TLS renewal, expiry, and client connectivity still need testing on disposable target VPSes across the intended OS releases.
+- Full-mode in-place upgrades and service-aware backups/restores are not supported yet.
 
-The system database is root-only (`0700` directory, `0600` file); on an installed VPS use `sudo ispbandits ...` for administrative commands until a dedicated least-privilege operator group is designed.
-
-## Data compatibility and safety
-
-- Existing Nginx Bandit `users` fields are preserved. Old `data_usage` is imported once into `traffic_totals` as `legacy_bytes`, because its direction/source may not be reliable network traffic.
-- New per-protocol totals split upload and download. Xray collection uses Xray StatsService but still needs live-target validation. SSH accounting must use a validated network-byte source; `/proc/<pid>/io` is not a network meter.
-- Account creation, Xray config generation, service deployment, and scheduled expiry reconciliation are present. Disable/delete/renew workflows beyond automatic expiry are not complete; quota enforcement is disabled.
-- Backup uses SQLite's online backup API, a private `0600` tar.gz archive with checksum manifest, atomic publication, archive validation, integrity checks, and a pre-restore rollback backup. This fixes the previous archive-extension/restore-menu mismatch.
-
-## Roadmap to Version 1
-
-1. Run the full installer on a disposable target and test client connectivity, TLS renewal, expiry, and rollback.
-2. Add safe disable/delete/renew operations and reconcile each one with Xray and SSH services.
-3. Implement a trustworthy SSH/Dropbear network-byte meter and test known transfers through reconnects and restarts.
-4. Validate Xray StatsService deltas on a live target and ensure SSH/Xray totals stay consistent.
-5. Harden service-aware backup/restore for generated config, certificate state, SQLite, and OS accounts.
-6. Verify clean installs on Ubuntu 22.04, Ubuntu 24.04, Debian 12, and Debian 13 before declaring them supported; leave quota enforcement disabled until metering passes.
+Report security concerns privately to the project owner; do not post real credentials, private keys, or customer data in public issues.
 
 ## Branding and copyright
 
-The project publisher is **ISPbandits Dev**. The combined product's public name is not yet finalized. A copyright/proprietary notice is included in source and installation materials. Copyright notices discourage casual theft but do not technically prevent copying; repository access controls and final legal terms matter.
-
-© 2026 ISPbandits Dev. All rights reserved. Proprietary software.
+© 2026 ISPbandits Dev. All rights reserved. Proprietary software. Unauthorized copying, redistribution, or resale is prohibited.
