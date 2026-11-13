@@ -242,6 +242,7 @@ def enforce_data_quotas(path: Path | str, today: dt.date | None = None) -> list[
             usernames = []
             for row in rows:
                 conn.execute("UPDATE users SET status='QUOTA_EXCEEDED' WHERE id=?", (row["id"],))
+                conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (row["id"],))
                 conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
                     VALUES('quota-exceeded',?,?)""",
                     (row["id"], f"measured lifetime usage reached {row['measured']} bytes"))
@@ -261,7 +262,7 @@ def set_data_limit(path: Path | str, username: str, limit_bytes: int,
     conn = connect(path)
     try:
         with transaction(conn):
-            row = conn.execute("""SELECT id,status,expiry_date FROM users WHERE username=?""",
+            row = conn.execute("""SELECT id,status,expiry_date,data_limit FROM users WHERE username=?""",
                                (username,)).fetchone()
             if not row:
                 raise ValueError(f"Unknown account: {username}")
@@ -276,12 +277,38 @@ def set_data_limit(path: Path | str, username: str, limit_bytes: int,
                 new_status = "QUOTA_EXCEEDED"
             conn.execute("UPDATE users SET data_limit=?,status=? WHERE id=?",
                          (limit_bytes, new_status, row["id"]))
+            if new_status == "QUOTA_EXCEEDED":
+                conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (row["id"],))
+            elif old_status == "QUOTA_EXCEEDED" and new_status == "ACTIVE":
+                conn.execute("UPDATE protocol_accounts SET enabled=1 WHERE user_id=?", (row["id"],))
             conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
                 VALUES('quota-updated',?,?)""",
                 (row["id"], f"lifetime quota set to {limit_bytes} bytes; status {old_status}->{new_status}"))
             return {"username": username, "measured_bytes": measured,
                     "old_status": old_status, "status": new_status,
-                    "expiry_date": str(row["expiry_date"])}
+                    "expiry_date": str(row["expiry_date"]),
+                    "old_limit_bytes": int(row["data_limit"] or 0)}
+    finally:
+        conn.close()
+
+
+def restore_quota_lock(path: Path | str, username: str, limit_bytes: int) -> None:
+    """Fail closed after an external reactivation error; restore a quota lock."""
+    validate_username(username)
+    if isinstance(limit_bytes, bool) or not isinstance(limit_bytes, int) or limit_bytes <= 0:
+        raise ValueError("A restored quota lock must have a positive byte limit")
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+            if not row:
+                raise ValueError(f"Unknown account: {username}")
+            conn.execute("UPDATE users SET data_limit=?,status='QUOTA_EXCEEDED' WHERE id=?",
+                         (limit_bytes, row["id"]))
+            conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (row["id"],))
+            conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
+                VALUES('quota-reactivation-failed',?,?)""",
+                (row["id"], f"reactivation failed; restored quota lock at {limit_bytes} bytes"))
     finally:
         conn.close()
 
@@ -375,10 +402,15 @@ def create_xray_protocol(path: Path | str, username: str, protocol: str,
 
 
 def delete_user_record(path: Path | str, username: str) -> None:
-    """Delete a user record for failed creation rollback; related rows cascade."""
+    """Delete a user record after external revocation; related rows cascade and audit remains."""
     conn = connect(path)
     try:
         with transaction(conn):
+            row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+            if not row:
+                raise ValueError(f"Unknown account: {username}")
+            conn.execute("INSERT INTO audit_events(event_type,user_id,detail) VALUES('user-deleted',?,?)",
+                         (row["id"], f"account and related protocol/usage rows deleted: {username}"))
             cur = conn.execute("DELETE FROM users WHERE username=?", (username,))
             if cur.rowcount != 1:
                 raise ValueError(f"Unknown account: {username}")
@@ -397,8 +429,214 @@ def expire_users(path: Path | str, today: dt.date | None = None) -> list[str]:
                   AND substr(COALESCE(expiry_date,''),1,10) < ?""", (today.isoformat(),)).fetchall()
             for row in rows:
                 conn.execute("UPDATE users SET status='EXPIRED' WHERE id=?", (row["id"],))
+                conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (row["id"],))
                 conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
                     VALUES('user-expired',?,'expiry-date reached')""", (row["id"],))
             return [str(row["username"]) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_accounts(path: Path | str) -> list[dict[str, object]]:
+    """Return account metadata and protocol state without exposing secrets."""
+    conn = connect(path)
+    try:
+        users = conn.execute("""SELECT id,username,expiry_date,status,max_logins,
+                data_limit,created_at FROM users ORDER BY username""").fetchall()
+        result = []
+        for user in users:
+            protocols = conn.execute("""SELECT p.protocol,p.external_identity,p.enabled,
+                    EXISTS(SELECT 1 FROM protocol_secrets s
+                           WHERE s.user_id=p.user_id AND s.protocol=p.protocol) AS has_secret
+                FROM protocol_accounts p WHERE p.user_id=? ORDER BY p.protocol""",
+                (user["id"],)).fetchall()
+            traffic = conn.execute("""SELECT protocol,upload_bytes,download_bytes,legacy_bytes,updated_at
+                FROM traffic_totals WHERE user_id=? ORDER BY protocol""", (user["id"],)).fetchall()
+            result.append({
+                "id": int(user["id"]), "username": str(user["username"]),
+                "expiry_date": str(user["expiry_date"]), "status": str(user["status"]),
+                "max_logins": int(user["max_logins"] or 0),
+                "data_limit": int(user["data_limit"] or 0),
+                "created_at": str(user["created_at"] or ""),
+                "protocols": [{"protocol": str(p["protocol"]),
+                               "identity": str(p["external_identity"]),
+                               "enabled": bool(p["enabled"]),
+                               "credential_provisioned": bool(p["has_secret"])} for p in protocols],
+                "traffic": [{"protocol": str(t["protocol"]),
+                             "upload_bytes": int(t["upload_bytes"]),
+                             "download_bytes": int(t["download_bytes"]),
+                             "legacy_bytes": int(t["legacy_bytes"]),
+                             "updated_at": str(t["updated_at"])} for t in traffic],
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def get_account(path: Path | str, username: str) -> dict[str, object]:
+    validate_username(username)
+    for account in list_accounts(path):
+        if account["username"] == username:
+            return account
+    raise ValueError(f"Unknown account: {username}")
+
+
+def renew_user(path: Path | str, username: str, expiry_date: str) -> dict[str, str]:
+    """Set a validated expiry date without implicitly clearing a lockout."""
+    validate_username(username)
+    try:
+        expiry = dt.date.fromisoformat(expiry_date)
+    except ValueError as exc:
+        raise ValueError("Expiry must be an ISO date: YYYY-MM-DD") from exc
+    if expiry < dt.date.today():
+        raise ValueError("New expiry date must be today or later")
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            user = conn.execute("SELECT id,expiry_date,status FROM users WHERE username=?",
+                                (username,)).fetchone()
+            if not user:
+                raise ValueError(f"Unknown account: {username}")
+            old_expiry = str(user["expiry_date"])
+            status = str(user["status"]).upper()
+            conn.execute("UPDATE users SET expiry_date=? WHERE id=?", (expiry.isoformat(), user["id"]))
+            conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
+                VALUES('user-renewed',?,?)""",
+                (user["id"], f"expiry {old_expiry}->{expiry.isoformat()}; status remains {status}"))
+            return {"username": username, "old_expiry": old_expiry,
+                    "expiry_date": expiry.isoformat(), "status": status}
+    finally:
+        conn.close()
+
+
+def disable_user(path: Path | str, username: str) -> dict[str, str]:
+    """Disable all protocol links and set the account to an explicit disabled state."""
+    validate_username(username)
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            user = conn.execute("SELECT id,status FROM users WHERE username=?", (username,)).fetchone()
+            if not user:
+                raise ValueError(f"Unknown account: {username}")
+            old_status = str(user["status"]).upper()
+            if old_status == "DISABLED":
+                return {"username": username, "old_status": old_status, "status": "DISABLED"}
+            conn.execute("UPDATE users SET status='DISABLED' WHERE id=?", (user["id"],))
+            conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (user["id"],))
+            conn.execute("INSERT INTO audit_events(event_type,user_id,detail) VALUES('user-disabled',?,?)",
+                         (user["id"], f"status {old_status}->DISABLED; all protocol links disabled"))
+            return {"username": username, "old_status": old_status, "status": "DISABLED"}
+    finally:
+        conn.close()
+
+
+def enable_user(path: Path | str, username: str,
+                today: dt.date | None = None) -> dict[str, str | int]:
+    """Explicitly reactivate a disabled/expired account only if date and quota permit."""
+    validate_username(username)
+    today = today or dt.date.today()
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            user = conn.execute("""SELECT id,status,expiry_date,data_limit
+                FROM users WHERE username=?""", (username,)).fetchone()
+            if not user:
+                raise ValueError(f"Unknown account: {username}")
+            old_status = str(user["status"]).upper()
+            if old_status not in {"DISABLED", "EXPIRED"}:
+                raise ValueError(f"Only DISABLED or EXPIRED accounts can be enabled; current status is {old_status}")
+            try:
+                expiry = dt.date.fromisoformat(str(user["expiry_date"])[:10])
+            except ValueError as exc:
+                raise ValueError("Account has an invalid expiry date; renew it before enabling") from exc
+            if expiry < today:
+                raise ValueError("Account expiry is in the past; renew it before enabling")
+            measured = int(conn.execute("""SELECT COALESCE(SUM(upload_bytes+download_bytes),0)
+                FROM traffic_totals WHERE user_id=?""", (user["id"],)).fetchone()[0])
+            limit_bytes = int(user["data_limit"] or 0)
+            if limit_bytes > 0 and measured >= limit_bytes:
+                raise ValueError("Account has reached its lifetime quota; increase the quota before enabling")
+            conn.execute("UPDATE users SET status='ACTIVE' WHERE id=?", (user["id"],))
+            conn.execute("UPDATE protocol_accounts SET enabled=1 WHERE user_id=?", (user["id"],))
+            conn.execute("INSERT INTO audit_events(event_type,user_id,detail) VALUES('user-enabled',?,?)",
+                         (user["id"], f"status {old_status}->ACTIVE; expiry {expiry.isoformat()}"))
+            return {"username": username, "old_status": old_status,
+                    "status": "ACTIVE", "expiry_date": expiry.isoformat(),
+                    "measured_bytes": measured, "data_limit": limit_bytes}
+    finally:
+        conn.close()
+
+
+def inactive_usernames(path: Path | str) -> list[str]:
+    """List accounts whose non-active state must continue to be externally enforced."""
+    conn = connect(path)
+    try:
+        return [str(row["username"]) for row in conn.execute(
+            "SELECT username FROM users WHERE UPPER(COALESCE(status,''))!='ACTIVE' ORDER BY username")]
+    finally:
+        conn.close()
+
+
+def get_xray_protocol_state(path: Path | str, username: str,
+                            protocol: str) -> dict[str, object] | None:
+    """Snapshot the managed Xray identity/secret needed for an exact rotation rollback."""
+    if protocol not in {"vless", "trojan"}:
+        raise ValueError("Xray protocol must be vless or trojan")
+    conn = connect(path)
+    try:
+        user = conn.execute("SELECT id,uuid FROM users WHERE username=?", (username,)).fetchone()
+        if not user:
+            raise ValueError(f"Unknown account: {username}")
+        link = conn.execute("""SELECT external_identity,credential_ref,enabled
+            FROM protocol_accounts WHERE user_id=? AND protocol=?""",
+            (user["id"], protocol)).fetchone()
+        secret = conn.execute("SELECT secret FROM protocol_secrets WHERE user_id=? AND protocol=?",
+                              (user["id"], protocol)).fetchone()
+        return {"uuid": user["uuid"],
+                "link": (None if link is None else {
+                    "external_identity": str(link["external_identity"]),
+                    "credential_ref": link["credential_ref"],
+                    "enabled": int(link["enabled"]),
+                }),
+                "secret": None if secret is None else str(secret["secret"])}
+    finally:
+        conn.close()
+
+
+def restore_xray_protocol_state(path: Path | str, username: str, protocol: str,
+                                state: dict[str, object] | None) -> None:
+    """Restore an exact pre-rotation Xray protocol state without logging secrets."""
+    if protocol not in {"vless", "trojan"}:
+        raise ValueError("Xray protocol must be vless or trojan")
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            user = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+            if not user:
+                raise ValueError(f"Unknown account: {username}")
+            if state is None:
+                conn.execute("DELETE FROM protocol_accounts WHERE user_id=? AND protocol=?",
+                             (user["id"], protocol))
+            else:
+                conn.execute("UPDATE users SET uuid=? WHERE id=?", (state.get("uuid"), user["id"]))
+                link = state.get("link")
+                if link is None:
+                    conn.execute("DELETE FROM protocol_accounts WHERE user_id=? AND protocol=?",
+                                 (user["id"], protocol))
+                else:
+                    conn.execute("""UPDATE protocol_accounts SET external_identity=?,credential_ref=?,enabled=?
+                        WHERE user_id=? AND protocol=?""",
+                        (link["external_identity"], link["credential_ref"], link["enabled"], user["id"], protocol))
+                secret = state.get("secret")
+                if secret is None:
+                    conn.execute("DELETE FROM protocol_secrets WHERE user_id=? AND protocol=?",
+                                 (user["id"], protocol))
+                else:
+                    conn.execute("""INSERT INTO protocol_secrets(user_id,protocol,secret)
+                        VALUES(?,?,?) ON CONFLICT(user_id,protocol) DO UPDATE SET
+                        secret=excluded.secret,updated_at=CURRENT_TIMESTAMP""",
+                        (user["id"], protocol, secret))
+            conn.execute("INSERT INTO audit_events(event_type,user_id,detail) VALUES('protocol-rotation-rolled-back',?,?)",
+                         (user["id"], f"{protocol} candidate not activated; prior protocol state restored"))
     finally:
         conn.close()

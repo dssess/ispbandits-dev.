@@ -70,6 +70,14 @@ class FoundationTests(unittest.TestCase):
         database.initialize(self.db)
         self.assertEqual(0o755, parent.stat().st_mode & 0o777)
 
+    def test_backup_rejects_public_existing_directory_without_chmod(self):
+        database.initialize(self.db)
+        public_dir = self.root / "public-backups"
+        public_dir.mkdir(mode=0o755)
+        with self.assertRaisesRegex(PermissionError, "must be private"):
+            backup.create_backup(self.db, public_dir)
+        self.assertEqual(0o755, public_dir.stat().st_mode & 0o777)
+
     def test_collector_adds_counter_deltas_once(self):
         database.initialize(self.db)
         database.add_user(self.db, "alice", "2027-02-01")
@@ -173,6 +181,8 @@ class FoundationTests(unittest.TestCase):
     def test_expiry_marks_only_due_active_users_and_is_idempotent(self):
         database.initialize(self.db)
         database.add_user(self.db, "alice", "2026-11-12")
+        database.link_protocol(self.db, "alice", "openssh", "alice")
+        database.link_protocol(self.db, "alice", "vless", "alice-vless@example.invalid")
         database.add_user(self.db, "bob", "2026-11-14")
         today = dt.date(2026, 11, 13)
         self.assertEqual(["alice"], database.expire_users(self.db, today))
@@ -180,6 +190,7 @@ class FoundationTests(unittest.TestCase):
         statuses = {row["username"]: row["status"] for row in database.list_usage(self.db)}
         self.assertEqual("EXPIRED", statuses["alice"])
         self.assertEqual("ACTIVE", statuses["bob"])
+        self.assertEqual([], database.list_enabled_protocols(self.db, "alice"))
 
 
 if __name__ == "__main__":

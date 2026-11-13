@@ -1,6 +1,6 @@
 # ISPbandits Dev — Unified VPS Manager
 
-**Version:** 0.1.0-alpha
+**Version:** 1.0.0-alpha.1
 **Publisher:** ISPbandits Dev
 **License:** Proprietary (`LICENSE.proprietary`)
 
@@ -19,6 +19,7 @@ ISPbandits Dev is an early single-VPS management alpha combining Linux SSH accou
 
 - [Requirements](#requirements)
 - [Quick install (fresh VPS)](#quick-install-fresh-vps)
+- [Update a managed install](#update-a-managed-install)
 - [Get the source](#get-the-source)
 - [Pre-install checks](#pre-install-checks)
 - [Install](#install)
@@ -50,7 +51,7 @@ For a guided full installation, run this on the **fresh VPS**. Review the script
 curl -fsSL https://raw.githubusercontent.com/dssess/ispbandits-dev./main/quick-install.sh -o quick-install.sh && less quick-install.sh && sudo bash quick-install.sh
 ```
 
-The script asks for the hostname and TLS choice, installs prerequisites, downloads the project, and calls the existing checked full installer. The default Let's Encrypt path needs DNS already pointed at the VPS and TCP 80 reachable. You can instead supply existing certificate files or explicitly select a self-signed certificate for testing only. It pauses for a typed `YES` before changing the server. Do not run it on an existing NevermoreSSH or Nginx Bandit VPS.
+The script asks for the hostname and TLS choice, installs prerequisites, downloads the project release source, and calls the existing checked full installer. The default Let's Encrypt path needs DNS already pointed at the VPS and TCP 80 reachable. You can instead supply existing certificate files or explicitly select a self-signed certificate for testing only. It pauses for a typed `YES` before changing the server. Do not run it on an existing NevermoreSSH or Nginx Bandit VPS.
 
 If you already cloned the project, run `sudo bash quick-install.sh` from the checkout; it will reuse those local files rather than downloading the source again.
 
@@ -100,7 +101,19 @@ The installer installs the pinned Xray release with checksum verification (amd64
 
 After install, open TCP **443** and **8443** in the cloud/provider firewall if required. Do not open port 10085 to the internet. Use `--self-signed` only for a temporary connectivity test; self-signed TLS is not suitable for production clients.
 
-The full installer is for a fresh VPS only. It intentionally refuses full-mode in-place upgrades. Do not run it on the previously inspected NevermoreSSH or Nginx Bandit servers.
+Fresh full installation is for a clean VPS only. Do not run it on the previously inspected NevermoreSSH or Nginx Bandit servers. Recognized ISPbandits installs can use the code-only upgrade path below; it preserves Xray, TLS, and service topology.
+
+### Update a managed install
+
+From a terminal on a server already marked as a managed ISPbandits install, fetch the guided updater and review it before running:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dssess/ispbandits-dev./main/quick-install.sh -o quick-install.sh
+less quick-install.sh
+sudo bash quick-install.sh --upgrade
+```
+
+The updater requires typing `UPGRADE`, makes a protected SQLite backup before schema migration, pauses managed collector/expiry timers, preserves the installed deployment mode/domain/meter setting, and restores the prior package and database if the upgrade fails. It does not update Xray, TLS certificates, or service topology. Do not use it to migrate a NevermoreSSH or Nginx Bandit installation.
 
 ### Foundation-only install
 
@@ -122,7 +135,7 @@ sudo ispbandits
 sudo ispbandits menu
 ```
 
-An interactive quick install opens this cyan-framed server dashboard when installation completes. It shows host/OS/uptime, account and measured-traffic summaries, service-state badges, and numbered options for account creation, usage, approximate online SSH/Dropbear process visibility, expiry processing, backups, database verification, and lifetime quota updates. Administrative commands require root; the menu tells you when `sudo` is needed.
+An interactive quick install opens this cyan-framed server dashboard when installation completes. It shows host/OS/uptime, account and measured-traffic summaries, service-state badges, and numbered options for account creation, usage, approximate online SSH process visibility, expiry processing, backups/restores, verification, quota updates, and account lifecycle actions. Administrative commands require root; the menu tells you when `sudo` is needed.
 
 Account creation takes a username and required expiry date (`YYYY-MM-DD`). The default protocol set is OpenSSH, VLESS, and Trojan:
 
@@ -130,7 +143,7 @@ Account creation takes a username and required expiry date (`YYYY-MM-DD`). The d
 sudo ispbandits account-create alice --expires 2027-01-01
 ```
 
-The command creates a no-home Linux SSH account and distinct VLESS/Trojan credentials. When Xray and/or the experimental meter is active, it seeds the new account's traffic checkpoints before disclosing credentials, so the first observed traffic is not discarded as a baseline. It prints generated passwords/secrets once; save them securely. Never put them in a ticket, public issue, repository, or shell script. When the managed Xray service is active, new Xray identities are applied to its validated config; otherwise they are stored but will not accept connections until Xray is installed and activated.
+The command creates a no-home Linux SSH account and distinct VLESS/Trojan credentials. Before creating an SSH user, it checks the active OpenSSH service, effective password authentication, and TCP-forwarding settings; it does not silently change the VPS administrator's SSH configuration. If those prerequisites are disabled, correct them in your server policy before retrying. The output reports the effective sshd port(s), the VLESS/Trojan ports, and import links when an installed domain is available. When Xray and/or the experimental meter is active, it seeds the new account's traffic checkpoints before disclosing credentials, so the first observed traffic is not discarded as a baseline. It prints generated passwords/secrets and import links once; save them securely. Never put them in a ticket, public issue, repository, or shell script. When Xray is installed but stopped, the generated config is updated without starting the service.
 
 Choose protocols explicitly when needed. `--limit-gb N` sets a shared lifetime cap in decimal GB (1 GB = 1,000,000,000 bytes); `0` means unlimited. A nonzero cap is accepted only while the Xray service and optional experimental meter timer are active, managed OpenSSH mappings are valid, and the meter has published a fresh valid snapshot. Shared quotas support managed OpenSSH, VLESS, and Trojan identities; Dropbear and VMess are unsupported.
 
@@ -148,13 +161,24 @@ sudo ispbandits account-create xrayonly --expires 2027-01-01 --protocols vless t
 sudo ispbandits account-create sshonly --expires 2027-01-01 --protocols openssh
 ```
 
-Supported `--protocols` values are `openssh`, `dropbear`, `vless`, and `trojan`. Creating a Dropbear account does not install or configure Dropbear. This alpha does not yet provide complete renew/disable/delete workflows.
+Supported `--protocols` values are `openssh`, `vless`, and `trojan`. New Dropbear and VMess provisioning is not supported; legacy protocol rows may be displayed but are not quota-managed.
 
 ## Monitor and manage
 
 ```bash
 # Show account-level usage totals, measured traffic and quota state.
 sudo ispbandits usage
+sudo ispbandits account-list
+sudo ispbandits account-show alice     # never prints stored credentials
+
+# Renew expiry; an EXPIRED account remains locked until explicitly enabled.
+sudo ispbandits renew alice --expires 2027-06-01
+sudo ispbandits enable alice
+sudo ispbandits disable alice
+sudo ispbandits ssh-password-reset alice  # new password is shown once
+
+# Permanent deletion requires an explicit confirmation flag.
+sudo ispbandits account-delete alice --yes
 
 # Show observed SSH/Dropbear daemon processes for managed accounts.
 # This is approximate and is not a count of unique devices.
@@ -170,7 +194,7 @@ sudo ispbandits verify
 sudo ispbandits about
 ```
 
-On a full installation, expired accounts are marked expired, Linux SSH passwords are locked and their processes terminated, and expired Xray identities are removed from the generated configuration. If Xray config reconciliation fails, the service is stopped fail-closed. The default timer collects Xray traffic only; SSH bytes remain unmeasured unless the separate experimental mode is explicitly installed.
+On a full installation, expired accounts are marked expired, Linux SSH passwords are locked and their processes terminated, and expired Xray identities are removed from the generated configuration. Daily expiry reconciliation retries revocation for all non-active accounts. Disable removes all linked access while preserving account and traffic history. Renewing does not silently clear a disabled/expired/quota state; use `enable` only after expiry and quota checks pass. Permanent deletion removes traffic/history after deactivating service access, so make a backup first. If Xray config reconciliation fails, the service is stopped fail-closed. The default timer collects Xray traffic only; SSH bytes remain unmeasured unless the separate experimental mode is explicitly installed.
 
 The default Xray traffic collector runs every minute in Xray-only mode. To run it manually:
 
@@ -204,11 +228,11 @@ sudo ispbandits backup --dir /var/backups/ispbandits-dev
 Restore from a previously created archive (the current database is backed up first when it exists):
 
 ```bash
-sudo ispbandits restore /var/backups/ispbandits-dev/ispbandits-YYYYMMDDTHHMMSSZ.tar.gz \
+sudo ispbandits restore /var/backups/ispbandits-dev/ispbandits-YYYYMMDDTHHMMSS.ffffffZ.tar.gz \
   --dir /var/backups/ispbandits-dev
 ```
 
-Keep backup files private: they contain account records and protocol credentials. The archive includes a checksum manifest and is written with restrictive permissions. This alpha's backup covers the SQLite database; it is **not** a complete system snapshot of service config, certificates, or OS accounts.
+Keep backup files private: they contain account records and protocol credentials. The archive includes a checksum manifest and is written with restrictive permissions. Restore pauses managed collector/expiry/Xray units, preserves a rollback database, reconciles Xray, and resumes prior timers. It is **not** a complete system snapshot of service config, certificates, or OS accounts, and it cannot reconstruct Linux users removed outside ISPbandits.
 
 ## Development and tests
 
@@ -238,11 +262,11 @@ GitHub Actions runs these checks on Python 3.10–3.13 for pushes, pull requests
 ## Current limitations
 
 - The OpenSSH per-user meter and shared SSH+Xray lifetime quota enforcement are experimental, opt-in, and not live-validated; they are not production-ready or a hard real-time data cap.
-- Dropbear traffic is not supported by the prototype meter; an enabled managed Dropbear identity blocks full metering/quota collection.
-- VMess is not included; supported Xray protocols are VLESS and Trojan.
+- New managed accounts support OpenSSH, VLESS, and Trojan. Dropbear/VMess are not provisioned, and legacy linked identities are not eligible for shared quota enforcement.
 - The online SSH view reports approximate process observations, not unique users/devices or guaranteed sessions.
-- Full deployment, TLS renewal, expiry, and client connectivity still need testing on disposable target VPSes across the intended OS releases.
-- Full-mode in-place upgrades and service-aware backups/restores are not supported yet.
+- Full deployment, TLS renewal, expiry, SSH password policy, and client connectivity still need testing on disposable Ubuntu 22/24 and Debian 12/13 VPSes.
+- Code-only managed upgrades preserve service topology; they do not upgrade Xray binaries, TLS certificates, nftables rules, or the protocol/service design.
+- Restore covers SQLite and reconciles ISPbandits-owned services only; it is not a full host backup and must not be used to migrate from NevermoreSSH or Nginx Bandit.
 
 Report security concerns privately to the project owner; do not post real credentials, private keys, or customer data in public issues.
 

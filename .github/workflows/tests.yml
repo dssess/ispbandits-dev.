@@ -33,6 +33,6 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q src tests
       - name: Check shell syntax
-        run: bash -n install.sh scripts/refresh-tls.sh
+        run: bash -n install.sh quick-install.sh scripts/refresh-tls.sh
       - name: Validate installer check mode
         run: ./install.sh --check

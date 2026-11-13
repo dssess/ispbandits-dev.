@@ -1,46 +1,39 @@
-# ISPbandits Dev — Version 1 Project Brief
+# ISPbandits Dev v1.0.0-alpha.1 — Project Brief
 
-## Identity
+## Product identity and deployment target
 
-**Company / publisher:** ISPbandits Dev. This is the owner/publisher brand, not yet the final public product name. The combined system’s product name remains undecided; NevermoreSSH and Nginx Bandit are the existing systems whose useful functionality informs Version 1.
+**Publisher and product:** ISPbandits Dev. The project combines selected workflows from Nginx Bandit and NevermoreSSH into one fresh-install, single-VPS management platform. The source repository is public by the owner's request; the software remains proprietary under `LICENSE.proprietary`. Public visibility is not a grant of reuse rights.
 
-## Version 1 goal
+The intended target is a new, clean Ubuntu 22.04/24.04 or Debian 12/13 VPS. This alpha must not be installed over the user's existing NevermoreSSH or Nginx Bandit systems. The full installer supports x86_64 and arm64, provisions Xray VLESS over TLS on TCP 443 and Trojan over TLS on TCP 8443, and leaves the existing administrator SSH daemon/configuration unchanged.
 
-Build a fresh-install, single-VPS management system combining Nginx Bandit-style SSH user management and usage display with Xray protocols, while preserving a unified account record and a recoverable SQLite database. Do not modify the two existing VPS installations as the Version 1 deployment target; deployment is for a new, clean VPS.
+## Implemented v1 scope
 
-## Agreed initial scope
+- Unified SQLite account records for managed OpenSSH, VLESS, and Trojan identities, with legacy traffic preserved separately from measured counters.
+- Safe OpenSSH account creation with a generated password, no home directory, and a tunnel-only `/bin/false` shell. Account creation verifies effective sshd password authentication and TCP forwarding and reports the configured SSH port(s); it does not silently alter server-wide SSH policy.
+- Distinct VLESS UUIDs and Trojan credentials, protected Xray configuration generation, service-aware credential reconciliation, and endpoint/import-link output when a managed domain exists.
+- Account inspection, expiry renewal, disable/enable, explicit permanent deletion, SSH password reset, usage reports, expiry processing, backups/restores, verification, and a cyan-framed numbered admin menu.
+- Xray StatsService traffic collection by unique per-user identity. The default full-install collector is Xray-only.
+- An opt-in experimental OpenSSH per-session nftables byte counter and shared lifetime SSH+Xray quota workflow. It counts IP-layer bytes, not pure payload, is not live-validated on the supported distributions, and can overshoot between polls. It is disabled by default and is not suitable for billing or hard real-time caps.
+- A recognized-install, code-only upgrade path that backs up SQLite, pauses managed writer timers, preserves deployment/TLS/service topology, and rolls back the code/database if migration or installation fails.
 
-- SSH and Dropbear customer accounts, keeping server-administration SSH separate.
-- Xray Trojan and VLESS; VMess may be included as an optional protocol.
-- One account-management flow for creation, renewal, disabling, expiry, connection limits, and protocol mappings.
-- An online SSH/Dropbear view inspired by Nginx Bandit SSH panel option 1 → 5. Show active session observations and freshness; do not label process counts as unique devices unless tests validate that mapping.
-- SQLite as the first backend, extending the existing Nginx Bandit `users` database compatibly rather than replacing it with a new account store.
-- Nginx Bandit-style backup/restore, with the archive format, encryption behavior, permissions, and restore path made consistent and tested.
-- Per-user upload/download/total usage reporting. Xray usage comes from its StatsService. SSH usage must use a verified network-byte metering source; `/proc/<pid>/io` is not an acceptable substitute for network traffic.
-- Automatic quota enforcement remains off until counter accuracy is validated with known-byte transfers.
-- Target Ubuntu 22.04, Ubuntu 24.04, and Debian. Advertise support only after clean-install and protocol tests pass on each target.
+New Dropbear and VMess provisioning is not part of this alpha. Legacy linked identities may be visible in stored data but are not covered by the shared quota prototype.
 
-## Copyright and anti-copying notices
+## Ownership notice
 
-Use a consistent notice in the installer, source headers, admin menu, and server login/MOTD. Proposed starting notice:
+The installer, Python source, menu, and login/MOTD include:
 
-> © 2026 ISPbandits Dev. All rights reserved. Proprietary software. Unauthorized copying, redistribution, or resale is prohibited.
+> © 2026 ISPbandits Dev. All rights reserved. Proprietary software.
 
-The notice is a deterrent and ownership notice, not a technical barrier to copying. Protect source distribution with private repository access and a clear proprietary license/terms. Final legal terms and the display-name wording should be reviewed before public release.
+This communicates ownership but is not a technical anti-copying control. The full license terms are in `LICENSE.proprietary`.
 
-## Release gates
+## Release and production acceptance gates
 
-1. Confirm the working repository and final product name.
-2. Implement the backwards-compatible SQLite changes and verified SSH metering source.
-3. Implement SSH and Xray account provisioning/reconciliation.
-4. Implement online-session monitoring, the admin usage menu, and safe backup/restore. Keep “online” distinct from accurate network-byte accounting.
-5. Test install, authentication, known-byte upload/downloads, restarts, backup/restore, port conflicts, and rollback on clean Ubuntu 22.04, Ubuntu 24.04, and Debian VMs.
-6. Deploy only to the new clean VPS after a successful test/review.
+The local unit suite and GitHub Actions matrix cover Python 3.10–3.13, database migrations, account lifecycle transitions, backup/restore, config generation, counter parsing, and CLI/menu paths. They do not replace live deployment tests.
 
-## Existing design artifacts
+Before calling the system production-ready, use a disposable VPS for each target OS and validate: clean installation and rollback; DNS, TLS issuance/renewal, and firewall reachability; SSH password login and tunnel-only forwarding on the detected sshd port; real VLESS/Trojan client connections; known-byte IPv4/IPv6 upload/download attribution; concurrent sessions; quota transition and overshoot; collector/meter restart and state loss; expiry/disable/enable/renew/delete; and backup restore while the managed services are active. Publish test results and record the exact OS, kernel, OpenSSH, and Xray versions.
+
+## Earlier design artifacts
 
 - Architecture visual: `/home/ubuntu/nevermore-vpn-architecture.png`
 - Editable architecture source: `/home/ubuntu/nevermore-vpn-architecture.html`
-- SQLite usage collector aggregation code: `/home/ubuntu/traffic_collector.py`
-
-The collector requires an independent SSH network-accounting producer; it does not pretend process I/O is network usage.
+- Historical traffic collector prototype: `/home/ubuntu/traffic_collector.py`

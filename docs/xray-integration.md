@@ -7,13 +7,17 @@ A valid certificate chain and its matching private key are required. The certifi
 ## Commands added
 
 ```text
-ispbandits account-create USER --expires YYYY-MM-DD [--protocols openssh dropbear vless trojan]
+ispbandits account-create USER --expires YYYY-MM-DD [--protocols openssh vless trojan]
 ispbandits xray-provision USER vless|trojan [--rotate]
 sudo ispbandits xray-config --cert-file CERT --key-file KEY [--check-only]
 sudo ispbandits online
+sudo ispbandits renew USER --expires YYYY-MM-DD
+sudo ispbandits disable USER
+sudo ispbandits enable USER
+sudo ispbandits account-delete USER --yes
 ```
 
-`account-create` uses the Nginx Bandit-compatible no-home `/bin/false` system account pattern for SSH and prints the generated SSH password once. It does not alter SSH daemon configuration or the administrator account. VLESS/Trojan secrets are stored in the root-only DB and printed once. `xray-config` validates through an installed Xray executable before writing a 0640 configuration. `--apply` is intended only after the managed systemd service has been installed; it attempts an atomic config update and restores the old file if restart fails. Expiry reconciliation fails closed by stopping Xray if its regenerated config cannot be activated.
+`account-create` uses the Nginx Bandit-compatible no-home `/bin/false` system account pattern for SSH and prints the generated SSH password once. Before provisioning it checks the existing sshd's effective password-authentication and TCP-forwarding policy; it does not alter SSH daemon configuration or the administrator account. VLESS/Trojan secrets are stored in the root-only DB and printed once. `xray-config` validates through an installed Xray executable before writing a 0640 configuration. `--apply` is intended only after the managed systemd service has been installed; it attempts an atomic config update and restores the old file if restart fails. Expiry reconciliation fails closed by stopping Xray if its regenerated config cannot be activated.
 
 SSH online view is best-effort: it counts matching SSH/Dropbear daemon processes owned by managed local accounts. It is explicitly not a unique-device count or a protocol-level session guarantee; validate it on each target's OpenSSH/Dropbear build before relying on it operationally.
 
@@ -21,7 +25,7 @@ SSH online view is best-effort: it counts matching SSH/Dropbear daemon processes
 
 Xray user statistics require a `stats` object, the per-level `statsUserUplink` and `statsUserDownlink` policy flags, and unique non-empty user `email` identities. The Xray collector maps those identities to exactly one VLESS or Trojan account. `statsUserOnline` is enabled in the generated policy, but the management CLI does not yet display Xray online counts. Xray's online map is based on activity in the preceding 20 seconds and may not count loopback client addresses; use traffic-counter deltas for a robust “active recently” approximation when a local proxy is in front.
 
-The full installer runs the collector once per minute with explicit `--xray-only` mode, so VLESS/Trojan usage can be recorded without pretending SSH is measured. SSH byte accounting remains **not implemented end to end**; combined mode still requires a separate root-only producer at `/run/vpn-ssh-meter/counters.json`. Do not enable bandwidth quota enforcement until a real per-user network-byte source passes known-byte transfer, reconnect, restart, and reset tests on a target VPS.
+The full installer runs the collector once per minute with explicit `--xray-only` mode, so VLESS/Trojan usage can be recorded without pretending SSH is measured. An opt-in prototype OpenSSH producer now writes a root-only nftables-counter snapshot, and a separate full collector can enforce shared lifetime quotas. This implementation is experimental, counts IP-layer bytes, and has no live validation on a target VPS. Do not use it for billing or hard caps until known-byte transfer, reconnect, restart, concurrency, and failure tests pass on each supported target OS.
 
 ## Validation performed
 

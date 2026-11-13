@@ -46,6 +46,7 @@ class LifetimeQuotaTests(unittest.TestCase):
         self.assertEqual("QUOTA_EXCEEDED", row["status"])
         self.assertEqual(1000, row["measured_bytes"])
         self.assertEqual(1000, row["data_limit"])
+        self.assertEqual([], database.list_enabled_protocols(self.db, "alice"))
         self.assertEqual([], database.enforce_data_quotas(self.db))
 
     def test_legacy_imported_usage_does_not_trigger_a_new_measured_quota(self):
@@ -115,9 +116,10 @@ class LifetimeQuotaTests(unittest.TestCase):
         with patch.object(cli.os, "geteuid", return_value=0), \
              patch.object(cli, "_ssh_meter_timer_active", return_value=True), \
              patch.object(provisioning, "create_managed_account") as create:
-            result = cli.main(["--db", str(self.db), "account-create", "alice",
-                               "--expires", "2999-12-31", "--protocols", "dropbear"])
-        self.assertEqual(2, result)
+            with self.assertRaises(SystemExit) as raised:
+                cli.main(["--db", str(self.db), "account-create", "alice",
+                          "--expires", "2999-12-31", "--protocols", "dropbear"])
+        self.assertEqual(2, raised.exception.code)
         create.assert_not_called()
 
     def test_shared_quota_rejects_an_enabled_unmanaged_protocol(self):
@@ -128,6 +130,20 @@ class LifetimeQuotaTests(unittest.TestCase):
             result = cli.main(["--db", str(self.db), "quota-set", "alice", "--limit-gb", "10"])
         self.assertEqual(2, result)
         self.assertEqual(0, database.list_usage(self.db)[0]["data_limit"])
+
+    def test_quota_lift_does_not_reactivate_disabled_unsupported_protocol(self):
+        user_id = database.add_user(self.db, "alice", "2999-12-31", data_limit=100)
+        database.link_protocol(self.db, "alice", "vmess", "alice-vmess@xray.invalid")
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE users SET status='QUOTA_EXCEEDED' WHERE username='alice'")
+        conn.execute("UPDATE protocol_accounts SET enabled=0 WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+        with patch.object(cli.os, "geteuid", return_value=0):
+            result = cli.main(["--db", str(self.db), "quota-set", "alice", "--limit-gb", "0"])
+        self.assertEqual(2, result)
+        self.assertEqual("QUOTA_EXCEEDED", database.get_account(self.db, "alice")["status"])
+        self.assertEqual([], database.list_enabled_protocols(self.db, "alice"))
 
     def test_xray_only_quota_revoke_does_not_touch_a_same_named_local_user(self):
         database.add_user(self.db, "alice", "2999-12-31")
@@ -169,13 +185,47 @@ class LifetimeQuotaTests(unittest.TestCase):
         self.assertEqual(["alice"], database.enforce_data_quotas(self.db))
         at_limit = database.set_data_limit(self.db, "alice", 110)
         self.assertEqual("QUOTA_EXCEEDED", at_limit["status"])
+        self.assertEqual([], database.list_enabled_protocols(self.db, "alice"))
         reopened = database.set_data_limit(self.db, "alice", 111)
         self.assertEqual("ACTIVE", reopened["status"])
         self.assertEqual("QUOTA_EXCEEDED", reopened["old_status"])
         self.assertEqual("2999-12-31", reopened["expiry_date"])
+        self.assertEqual({("openssh", "alice"), ("vless", "alice-vless@xray.invalid")},
+                         set(database.list_enabled_protocols(self.db, "alice")))
         unlimited = database.set_data_limit(self.db, "alice", 0)
         self.assertEqual("ACTIVE", unlimited["status"])
         self.assertEqual(0, database.list_usage(self.db)[0]["data_limit"])
+
+    def test_quota_set_cli_reactivates_supported_links_after_limit_increase(self):
+        user_id = self._add_user("alice", 100)
+        self._add_traffic(user_id, "openssh", 80, 30)
+        self.assertEqual(["alice"], database.enforce_data_quotas(self.db))
+        with patch.object(cli.os, "geteuid", return_value=0), \
+             patch.object(cli, "_ssh_meter_ready", return_value=True), \
+             patch.object(cli.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=2000)), \
+             patch.object(cli, "_quota_reactivate") as reactivate:
+            result = cli.main(["--db", str(self.db), "quota-set", "alice", "--limit-gb", "1"])
+        self.assertEqual(0, result)
+        self.assertEqual("ACTIVE", database.get_account(self.db, "alice")["status"])
+        self.assertTrue(all(p["enabled"] for p in database.get_account(self.db, "alice")["protocols"]))
+        reactivate.assert_called_once_with(self.db, "alice", "2999-12-31")
+
+    def test_failed_quota_reactivation_restores_old_cap_and_database_lock(self):
+        user_id = self._add_user("alice", 100)
+        self._add_traffic(user_id, "openssh", 80, 30)
+        self.assertEqual(["alice"], database.enforce_data_quotas(self.db))
+        with patch.object(cli.os, "geteuid", return_value=0), \
+             patch.object(cli, "_ssh_meter_ready", return_value=True), \
+             patch.object(cli.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=2000)), \
+             patch.object(cli, "_quota_reactivate", side_effect=RuntimeError("Xray failed")), \
+             patch.object(cli, "_quota_revoke") as revoke:
+            result = cli.main(["--db", str(self.db), "quota-set", "alice", "--limit-gb", "1"])
+        self.assertEqual(2, result)
+        account = database.get_account(self.db, "alice")
+        self.assertEqual("QUOTA_EXCEEDED", account["status"])
+        self.assertEqual(100, account["data_limit"])
+        self.assertTrue(all(not p["enabled"] for p in account["protocols"]))
+        revoke.assert_called_once_with(self.db, ["alice"])
 
     def test_expired_account_is_not_reactivated_by_quota_update(self):
         database.add_user(self.db, "expireduser", "2020-01-01", data_limit=10)

@@ -5,12 +5,13 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-REPO_ARCHIVE="${ISPB_SOURCE_URL:-https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/heads/main}"
+REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.1"
 DOMAIN=""
 EMAIL=""
 CERT_FILE=""
 KEY_FILE=""
 MODE=""
+UPGRADE=0
 
 usage() {
   cat <<'EOF'
@@ -19,16 +20,40 @@ ISPbandits Dev v1 alpha quick installer
 Usage:
   sudo bash quick-install.sh [--domain HOSTNAME] [--email EMAIL]
                             [--cert-file CERT --key-file KEY | --self-signed]
+  sudo bash quick-install.sh --upgrade
 
 If no TLS option is supplied, the script interactively offers Let's Encrypt,
 existing certificate files, or a self-signed certificate (testing only).
 
-This installs on a fresh VPS only. It downloads the latest main branch and runs
-install.sh --full. It does not configure a cloud-provider firewall.
+Fresh installation is for a new VPS only. --upgrade updates a recognized
+ISPbandits install in code-only mode with database backup and rollback; it does
+not change Xray/TLS/service topology or provider firewall rules.
 EOF
 }
 
 fail() { echo "quick-install.sh: $*" >&2; exit 1; }
+
+verify_source_archive() {
+  python3 - "$1" <<'PY'
+import sys, tarfile
+from pathlib import PurePosixPath
+archive = sys.argv[1]
+with tarfile.open(archive, "r:gz") as tar:
+    members = tar.getmembers()
+    if not members or len(members) > 10000:
+        raise SystemExit("source archive has an invalid member count")
+    total = 0
+    for member in members:
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts or not path.parts:
+            raise SystemExit("source archive contains a traversal path")
+        if not (member.isfile() or member.isdir()) or member.issym() or member.islnk():
+            raise SystemExit("source archive contains a link or special file")
+        total += member.size
+        if total > 200 * 1024 * 1024:
+            raise SystemExit("source archive exceeds the 200 MiB extraction limit")
+PY
+}
 
 while (($#)); do
   case "$1" in
@@ -43,10 +68,49 @@ while (($#)); do
       shift 2
       ;;
     --self-signed) MODE=self-signed; shift ;;
+    --upgrade) UPGRADE=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+      *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if (( UPGRADE )); then
+  [[ -z "$DOMAIN$EMAIL$CERT_FILE$KEY_FILE$MODE" ]] || fail "Do not combine --upgrade with fresh-install domain or TLS options."
+  [[ ${EUID} -eq 0 ]] || fail "Run upgrade as root: sudo bash quick-install.sh --upgrade"
+  MARKER=/opt/ispbandits-dev/INSTALL_INFO
+  [[ -f "$MARKER" ]] || fail "No managed ISPbandits install marker at $MARKER."
+  grep -Fxq 'managed_by=ISPbandits-Dev-install.sh' "$MARKER" || fail "The existing install marker is not recognized."
+  grep -Fxq 'database_path=/var/lib/ispbandits-dev/database.db' "$MARKER" || fail "The existing database path is not the supported managed path."
+  [[ -r /etc/os-release ]] || fail "Cannot detect this operating system."
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "${ID:-}:${VERSION_ID:-}" in
+    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13) ;;
+    *) fail "Unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 22.04/24.04 or Debian 12/13." ;;
+  esac
+  command -v systemctl >/dev/null 2>&1 || fail "A systemd-based managed VPS is required."
+  [[ -r /dev/tty ]] || fail "Run the guided upgrade from an interactive terminal."
+  echo "This code-only upgrade backs up SQLite and leaves Xray/TLS/service topology unchanged."
+  read -r -p "Continue? Type UPGRADE: " CONFIRM </dev/tty
+  [[ "$CONFIRM" == UPGRADE ]] || fail "Upgrade cancelled."
+  SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  TMP_DIR=""
+  cleanup_upgrade() { [[ -z "$TMP_DIR" ]] || rm -rf -- "$TMP_DIR"; }
+  trap cleanup_upgrade EXIT
+  if [[ ! -f "$SOURCE_DIR/install.sh" || ! -f "$SOURCE_DIR/pyproject.toml" ]]; then
+    TMP_DIR=$(mktemp -d /tmp/ispbandits-quick-upgrade.XXXXXX)
+    command -v curl >/dev/null 2>&1 || fail "curl is required to fetch the pinned source archive."
+    curl -fL --retry 3 --proto '=https' --tlsv1.2 "$REPO_ARCHIVE" -o "$TMP_DIR/source.tar.gz"
+    verify_source_archive "$TMP_DIR/source.tar.gz" || fail "Downloaded source archive failed safety validation."
+    mkdir "$TMP_DIR/source"
+    tar -xzf "$TMP_DIR/source.tar.gz" --strip-components=1 -C "$TMP_DIR/source"
+    SOURCE_DIR="$TMP_DIR/source"
+  fi
+  [[ -f "$SOURCE_DIR/install.sh" && -f "$SOURCE_DIR/pyproject.toml" ]] || fail "Project source is incomplete."
+  bash "$SOURCE_DIR/install.sh" --upgrade
+  echo "Upgrade complete. Review the updated guide and run: sudo ispbandits verify"
+  exit 0
+fi
 
 prompt() {
   local __var=$1 __label=$2 __value
@@ -111,7 +175,7 @@ cat <<EOF
 INSTALLATION WARNING
 This alpha has not yet passed production client-connectivity testing. Use a fresh,
 disposable VPS. It will install Xray and may occupy TCP 443 and 8443. SSH per-user
-traffic metering and quota enforcement are not implemented.
+traffic metering and shared quota enforcement are experimental and not production-validated.
 
 Before continuing, point $DOMAIN to this VPS, ensure TCP 443 and 8443 are available,
 and allow those ports through the VPS/provider firewall. Let's Encrypt additionally
@@ -126,9 +190,9 @@ read -r -p "Continue on this fresh VPS? Type YES to proceed: " CONFIRM </dev/tty
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 if [[ "$MODE" == letsencrypt ]]; then
-  apt-get install -y ca-certificates curl tar certbot
+  apt-get install -y ca-certificates curl tar python3 certbot
 else
-  apt-get install -y ca-certificates curl tar
+  apt-get install -y ca-certificates curl tar python3
 fi
 
 if [[ "$MODE" == letsencrypt ]]; then
@@ -150,10 +214,7 @@ if [[ ! -f "$SOURCE_DIR/install.sh" || ! -f "$SOURCE_DIR/pyproject.toml" ]]; the
   TMP_DIR=$(mktemp -d /tmp/ispbandits-quick-install.XXXXXX)
   curl -fL --retry 3 --proto '=https' --tlsv1.2 "$REPO_ARCHIVE" -o "$TMP_DIR/source.tar.gz"
   mkdir "$TMP_DIR/source"
-  # Reject unsafe archive paths before extracting the trusted GitHub source bundle.
-  if tar -tzf "$TMP_DIR/source.tar.gz" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-    fail "Downloaded source archive contains an unsafe path."
-  fi
+  verify_source_archive "$TMP_DIR/source.tar.gz" || fail "Downloaded source archive failed safety validation."
   tar -xzf "$TMP_DIR/source.tar.gz" --strip-components=1 -C "$TMP_DIR/source"
   SOURCE_DIR="$TMP_DIR/source"
 fi

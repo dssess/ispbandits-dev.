@@ -88,9 +88,32 @@ def delete_linux_ssh_account(username: str) -> None:
     pkill = shutil.which("pkill")
     if not userdel:
         raise ProvisioningError("userdel was not found")
+    try:
+        pwd.getpwnam(username)
+    except KeyError:
+        return
     if pkill:
         _run([pkill, "-KILL", "-u", username], check=False)
-    _run([userdel, "-f", username], check=False)
+    _run([userdel, "-f", username])
+
+
+def reset_linux_ssh_password(username: str, password: str | None = None) -> str:
+    """Set a new managed SSH password and return it for one-time display."""
+    database.validate_username(username)
+    if os.geteuid() != 0:
+        raise PermissionError("Resetting Linux SSH passwords requires root")
+    try:
+        pwd.getpwnam(username)
+    except KeyError as exc:
+        raise ValueError(f"Linux account does not exist: {username}") from exc
+    chpasswd = shutil.which("chpasswd")
+    if not chpasswd:
+        raise ProvisioningError("Required chpasswd utility was not found")
+    password = password or secrets.token_urlsafe(24)
+    if not password or any(c in password for c in ":\r\n"):
+        raise ValueError("Password must be non-empty and cannot contain colon or newline")
+    _run([chpasswd], input_text=f"{username}:{password}\n")
+    return password
 
 
 def expire_linux_ssh_account(username: str) -> None:
@@ -145,10 +168,10 @@ def create_managed_account(database_path: Path | str, username: str, expiry_date
                            protocols: tuple[str, ...] = ("openssh", "vless", "trojan"),
                            data_limit: int = 0) -> dict[str, object]:
     """Create one account and selected protocol identities with rollback on error."""
-    allowed = {"openssh", "dropbear", "vless", "trojan"}
+    allowed = {"openssh", "vless", "trojan"}
     if not protocols or len(set(protocols)) != len(protocols) or set(protocols) - allowed:
-        raise ValueError("Select one or more unique protocols from openssh, dropbear, vless, trojan")
-    ssh_selected = bool(set(protocols) & {"openssh", "dropbear"})
+        raise ValueError("Select one or more unique protocols from openssh, vless, trojan")
+    ssh_selected = "openssh" in protocols
     ssh_password = None
     db_created = False
     linux_created = False
@@ -159,7 +182,7 @@ def create_managed_account(database_path: Path | str, username: str, expiry_date
         ssh_password = create_linux_ssh_account(username, expiry_date)
         linux_created = True
     try:
-        ssh_protocols = tuple(p for p in protocols if p in {"openssh", "dropbear"})
+        ssh_protocols = tuple(p for p in protocols if p == "openssh")
         database.add_user(database_path, username, expiry_date, max_logins, data_limit, ssh_protocols)
         db_created = True
         for protocol in protocols:

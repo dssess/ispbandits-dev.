@@ -177,6 +177,10 @@ def _show_dashboard(db_path: Path) -> None:
     print(f"  {_paint('[03]', _Colors.WHITE)}  ONLINE SSH               {_paint('[04]', _Colors.WHITE)}  SERVICE STATUS")
     print(f"  {_paint('[05]', _Colors.WHITE)}  RUN EXPIRY CHECK         {_paint('[06]', _Colors.WHITE)}  BACKUP DATABASE")
     print(f"  {_paint('[07]', _Colors.WHITE)}  VERIFY DATABASE          {_paint('[08]', _Colors.WHITE)}  SET LIFETIME QUOTA")
+    print(f"  {_paint('[09]', _Colors.WHITE)}  LIST ACCOUNTS             {_paint('[10]', _Colors.WHITE)}  ACCOUNT DETAILS")
+    print(f"  {_paint('[11]', _Colors.WHITE)}  RENEW ACCOUNT             {_paint('[12]', _Colors.WHITE)}  DISABLE ACCOUNT")
+    print(f"  {_paint('[13]', _Colors.WHITE)}  ENABLE ACCOUNT            {_paint('[14]', _Colors.WHITE)}  RESET SSH PASSWORD")
+    print(f"  {_paint('[15]', _Colors.WHITE)}  DELETE ACCOUNT            {_paint('[16]', _Colors.WHITE)}  RESTORE DATABASE")
     print(f"  {_paint('[00]', _Colors.RED)}  EXIT")
     print()
     print(_paint(f"  ISPbandits Dev v1 alpha  |  {NOTICE}", _Colors.CYAN))
@@ -255,6 +259,60 @@ def _set_quota(db_path: Path) -> None:
         print("Quota must be a non-negative whole number of GB.")
 
 
+def _root_action(db_path: Path, command: str, prompt: str, extra: tuple[str, ...] = ()) -> None:
+    if os.geteuid() != 0:
+        print(f"This operation requires root. Start the menu with: sudo ispbandits")
+        return
+    try:
+        username = input(prompt).strip()
+        if not username:
+            print("Username cannot be empty.")
+            return
+        if command == "renew":
+            expiry = input("New expiry date (YYYY-MM-DD): ").strip()
+            _call_cli(db_path, "renew", username, "--expires", expiry)
+        else:
+            _call_cli(db_path, command, username, *extra)
+    except (EOFError, KeyboardInterrupt):
+        print("\nOperation cancelled.")
+
+
+def _delete_account(db_path: Path) -> None:
+    if os.geteuid() != 0:
+        print("Account deletion requires root. Start the menu with: sudo ispbandits")
+        return
+    try:
+        username = input("Account username to permanently delete: ").strip()
+        if not username:
+            return
+        confirm = input(f"This permanently deletes {username} and its usage. Type the username again: ").strip()
+        if confirm != username:
+            print("Confirmation did not match; no changes made.")
+            return
+        _call_cli(db_path, "account-delete", username, "--yes")
+    except (EOFError, KeyboardInterrupt):
+        print("\nDeletion cancelled.")
+
+
+def _restore_database(db_path: Path) -> None:
+    if os.geteuid() != 0:
+        print("Database restore requires root. Start the menu with: sudo ispbandits")
+        return
+    try:
+        archive = input("Absolute path to ISPbandits backup archive: ").strip()
+        if not archive.startswith("/"):
+            print("Use an absolute archive path; no changes made.")
+            return
+        confirm = input("Restore replaces the current database; a rollback backup will be saved. Type RESTORE: ").strip()
+        if confirm != "RESTORE":
+            print("Restore cancelled; no changes made.")
+            return
+        _call_cli(db_path, "restore", archive, "--dir", "/var/backups/ispbandits-dev")
+        print("Important: database restore does not restore OS accounts, certificates, or service files.")
+    except (EOFError, KeyboardInterrupt):
+        print("\nRestore cancelled.")
+
+
 def _service_status() -> None:
     units = (
         ("Xray proxy", "ispbandits-xray.service"),
@@ -310,6 +368,22 @@ def run_menu(db_path: Path) -> int:
             _call_cli(db_path, "verify")
         elif choice in {"8", "08"}:
             _set_quota(db_path)
+        elif choice in {"9", "09"}:
+            _call_cli(db_path, "account-list")
+        elif choice in {"10"}:
+            _root_action(db_path, "account-show", "Account username: ")
+        elif choice in {"11"}:
+            _root_action(db_path, "renew", "Account username: ")
+        elif choice in {"12"}:
+            _root_action(db_path, "disable", "Account username to disable: ")
+        elif choice in {"13"}:
+            _root_action(db_path, "enable", "Account username to enable: ")
+        elif choice in {"14"}:
+            _root_action(db_path, "ssh-password-reset", "Account username: ")
+        elif choice in {"15"}:
+            _delete_account(db_path)
+        elif choice in {"16"}:
+            _restore_database(db_path)
         else:
             print("Unknown option. Choose one of the displayed numbers.")
         _pause()

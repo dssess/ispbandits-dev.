@@ -28,11 +28,12 @@ Usage:
   sudo ./install.sh --full --domain vpn.example.com (--cert-file CERT --key-file KEY | --self-signed) [--experimental-ssh-meter]
   sudo ./install.sh --foundation-only [--upgrade] [--prefix PATH] [--db-path PATH]
                     [--bin-dir PATH] [--etc-dir PATH] [--backup-dir PATH]
+  sudo ./install.sh --upgrade
   ./install.sh --check
 
 Options:
-  --upgrade         Upgrade a prior install created by this installer. Makes a
-                    protected SQLite backup before applying schema migrations.
+  --upgrade         Code-only upgrade of a recognized managed install. Preserves
+                    Xray/TLS/service topology, backs up SQLite, and rolls back on failure.
   --full            Install Xray, VLESS/Trojan listeners, Xray-only usage collection,
                     TLS refresh, and daily account expiry timers. Requires a domain
                     and certificate pair, or explicit --self-signed (testing only).
@@ -101,8 +102,12 @@ if [[ "$SSH_METER" == 1 && "$FULL" != 1 ]]; then
   fail "--experimental-ssh-meter requires --full."
 fi
 
+if (( UPGRADE )); then
+  [[ "$FULL" == 0 && "$SSH_METER" == 0 && "$SELF_SIGNED" == 0 && -z "$DOMAIN$TLS_CERT$TLS_KEY" ]] ||
+    fail "--upgrade is code-only; do not combine it with fresh-deployment, TLS, or meter-topology options."
+fi
+
 if [[ "$CHECK_ONLY" != 1 && "$FULL" == 1 ]]; then
-  [[ "$UPGRADE" == 0 ]] || fail "--full currently supports fresh installs only; do not upgrade a live proxy with this alpha installer."
   [[ -n "$DOMAIN" ]] || fail "--full requires --domain."
   [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] || fail "Invalid DNS hostname: $DOMAIN"
   if (( SELF_SIGNED )); then
@@ -161,7 +166,14 @@ print(f"Python {sys.version.split()[0]} with SQLite {sqlite3.sqlite_version}: OK
 PY
 
 if [[ "$CHECK_ONLY" == 1 ]]; then
-  (cd "$SOURCE_DIR" && bash -n install.sh scripts/refresh-tls.sh && PYTHONPATH="$SOURCE_DIR/src" python3 -m compileall -q src tests && PYTHONPATH="$SOURCE_DIR/src" python3 -m unittest discover -s tests -v)
+  (cd "$SOURCE_DIR" && bash -n install.sh quick-install.sh scripts/refresh-tls.sh && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SOURCE_DIR/src" python3 - <<'PY'
+import ast
+from pathlib import Path
+for root in (Path("src"), Path("tests")):
+    for source in root.rglob("*.py"):
+        ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+PY
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SOURCE_DIR/src" python3 -m unittest discover -s tests -v)
   echo "Source checks passed. No system files were changed."
   exit 0
 fi
@@ -169,7 +181,14 @@ fi
 [[ ${EUID} -eq 0 ]] || fail "Run installation with sudo/root."
 
 # Validate the exact source before touching deployment paths.
-(cd "$SOURCE_DIR" && bash -n install.sh scripts/refresh-tls.sh && PYTHONPATH="$SOURCE_DIR/src" python3 -m compileall -q src tests && PYTHONPATH="$SOURCE_DIR/src" python3 -m unittest discover -s tests -v)
+(cd "$SOURCE_DIR" && bash -n install.sh quick-install.sh scripts/refresh-tls.sh && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SOURCE_DIR/src" python3 - <<'PY'
+import ast
+from pathlib import Path
+for root in (Path("src"), Path("tests")):
+    for source in root.rglob("*.py"):
+        ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+PY
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SOURCE_DIR/src" python3 -m unittest discover -s tests -v)
 
 if [[ "$FULL" == 1 ]]; then
   [[ "$PREFIX" == /opt/ispbandits-dev && "$DB_PATH" == /var/lib/ispbandits-dev/database.db &&
@@ -210,11 +229,19 @@ fi
 
 MARKER="$PREFIX/INSTALL_INFO"
 WRAPPER="$BIN_DIR/ispbandits"
+DEPLOY_FULL=$FULL
+DEPLOY_SSH_METER=$SSH_METER
+DEPLOY_DOMAIN=$DOMAIN
 if [[ "$UPGRADE" == 1 ]]; then
   [[ -f "$MARKER" ]] || fail "No installer marker at $MARKER; refusing to upgrade an unknown installation."
   grep -Fxq 'managed_by=ISPbandits-Dev-install.sh' "$MARKER" || fail "Install marker is not recognized."
   grep -Fxq "database_path=$DB_PATH" "$MARKER" || fail "Requested database path differs from the installed path."
-  if grep -Fxq 'full_xray=1' "$MARKER"; then fail "This installer does not yet support in-place upgrades of a full Xray deployment."; fi
+  DEPLOY_FULL=$(sed -n 's/^full_xray=//p' "$MARKER" | head -n1)
+  DEPLOY_SSH_METER=$(sed -n 's/^ssh_meter_experimental=//p' "$MARKER" | head -n1)
+  DEPLOY_DOMAIN=$(sed -n 's/^domain=//p' "$MARKER" | head -n1)
+  [[ "$DEPLOY_FULL" == 0 || "$DEPLOY_FULL" == 1 ]] || fail "Install marker has an invalid full_xray value."
+  [[ "$DEPLOY_SSH_METER" == 0 || "$DEPLOY_SSH_METER" == 1 ]] || fail "Install marker has an invalid experimental meter value."
+  if [[ "$DEPLOY_SSH_METER" == 1 && "$DEPLOY_FULL" != 1 ]]; then fail "Install marker has inconsistent meter deployment state."; fi
   [[ -f "$DB_PATH" ]] || fail "Installed database is missing; refusing an in-place upgrade."
   [[ -f "$WRAPPER" ]] && grep -Fq 'ISPbandits Dev managed wrapper' "$WRAPPER" || fail "Managed CLI wrapper is missing or has been replaced."
 else
@@ -343,6 +370,7 @@ ensure_dir "$PREFIX/src" 0755
 ensure_dir "$BIN_DIR" 0755
 ensure_dir "$(dirname -- "$DB_PATH")" 0700
 ensure_dir "$(dirname -- "$ETC_DIR/motd")" 0755
+ensure_dir "$BACKUP_DIR" 0700
 
 STAGE_DIR=""
 OLD_PACKAGE=""
@@ -359,6 +387,9 @@ XRAY_UNITS_INSTALLED=0
 XRAY_SERVICE_ENABLED=0
 SSH_METER_UNITS_INSTALLED=0
 XRAY_TMP=""
+UPGRADE_BACKUP=""
+UPGRADE_TIMERS_ACTIVE=()
+UPGRADE_DATABASE_MAY_BE_MUTATED=0
 
 cleanup() {
   local rc=$?
@@ -398,8 +429,17 @@ cleanup() {
     elif (( NEW_PACKAGE_INSTALLED )); then
       rm -rf -- "$PREFIX/src/ispbandits"
     fi
+    if (( UPGRADE && UPGRADE_DATABASE_MAY_BE_MUTATED )) && [[ -n "$UPGRADE_BACKUP" && -f "$UPGRADE_BACKUP" ]]; then
+      if ! PYTHONPATH="$PREFIX/src" python3 -c 'import sys; from ispbandits.backup import restore_backup; restore_backup(sys.argv[1], sys.argv[2], sys.argv[3])' \
+          "$DB_PATH" "$UPGRADE_BACKUP" "$BACKUP_DIR" >/dev/null 2>&1; then
+        echo "CRITICAL: package rollback completed but the pre-upgrade database restore failed; inspect $UPGRADE_BACKUP immediately." >&2
+      fi
+    fi
     if (( NEW_INSTALL )); then
       rm -f -- "$DB_PATH" "$DB_PATH-wal" "$DB_PATH-shm" "$MARKER"
+    fi
+    if (( UPGRADE )) && command -v systemctl >/dev/null 2>&1; then
+      for unit in "${UPGRADE_TIMERS_ACTIVE[@]}"; do systemctl start "$unit" >/dev/null 2>&1 || true; done
     fi
   elif [[ -n "$OLD_PACKAGE" && -d "$OLD_PACKAGE" ]]; then
     rm -rf -- "$OLD_PACKAGE"
@@ -418,8 +458,23 @@ PYTHONPATH="$STAGE_DIR" python3 -m compileall -q "$STAGE_DIR/ispbandits"
 find "$STAGE_DIR/ispbandits" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 if [[ "$UPGRADE" == 1 ]]; then
-  # Back up the old DB with the new backup code before applying migrations.
-  PYTHONPATH="$STAGE_DIR" python3 -m ispbandits --db "$DB_PATH" backup --dir "$BACKUP_DIR"
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in ispbandits-collect.timer ispbandits-ssh-collect.timer ispbandits-expire.timer ispbandits-ssh-meter.timer; do
+      if systemctl is-active --quiet "$unit"; then
+        UPGRADE_TIMERS_ACTIVE+=("$unit")
+        systemctl stop "$unit" || fail "Could not stop active writer timer $unit; aborting upgrade."
+        systemctl is-active --quiet "$unit" && fail "Writer timer $unit remained active; aborting upgrade."
+      fi
+    done
+    for unit in ispbandits-collect.service ispbandits-ssh-collect.service ispbandits-expire.service ispbandits-ssh-meter.service; do
+      if systemctl is-active --quiet "$unit"; then
+        systemctl stop "$unit" || fail "Could not stop active writer service $unit; aborting upgrade."
+        systemctl is-active --quiet "$unit" && fail "Writer service $unit remained active; aborting upgrade."
+      fi
+    done
+  fi
+  # Capture the rollback snapshot only after all managed writers are quiescent.
+  UPGRADE_BACKUP=$(PYTHONPATH="$STAGE_DIR" python3 -m ispbandits --db "$DB_PATH" backup --dir "$BACKUP_DIR")
 fi
 
 OLD_PACKAGE="$PREFIX/src/.ispbandits.previous.$$"
@@ -443,6 +498,7 @@ fi
 
 # On upgrades the configured DB already exists; initialize performs compatible,
 # transactional schema migrations. Fresh installs create a new empty DB.
+if (( UPGRADE )); then UPGRADE_DATABASE_MAY_BE_MUTATED=1; fi
 PYTHONPATH="$PREFIX/src" python3 -m ispbandits --db "$DB_PATH" init
 chmod 0600 "$DB_PATH"
 
@@ -479,17 +535,19 @@ fi
 
 cat > "$MARKER" <<EOF
 managed_by=ISPbandits-Dev-install.sh
-version=0.1.0-alpha
+version=1.0.0-alpha.1
 database_path=$DB_PATH
-full_xray=$FULL
-ssh_meter_experimental=$SSH_METER
-domain=$DOMAIN
+full_xray=$DEPLOY_FULL
+ssh_meter_experimental=$DEPLOY_SSH_METER
+domain=$DEPLOY_DOMAIN
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 chmod 0644 "$MARKER"
 
 echo
-if [[ "$FULL" == 1 ]]; then
+if (( UPGRADE )); then
+  echo "ISPbandits Dev v1 alpha code upgrade completed successfully."
+elif [[ "$DEPLOY_FULL" == 1 ]]; then
   echo "ISPbandits Dev v1 alpha full deployment installed successfully."
 else
   echo "ISPbandits Dev v1 alpha foundation installed successfully."
@@ -498,14 +556,22 @@ echo "Application: $PREFIX"
 echo "Database:    $DB_PATH"
 echo "Admin menu:  sudo ispbandits"
 echo "Copyright notice: $MOTD"
-if [[ "$FULL" == 1 ]]; then
+if [[ "$DEPLOY_FULL" == 1 ]]; then
   echo "Xray:         TCP 443 (VLESS) and TCP 8443 (Trojan); open these in the VPS/cloud firewall if needed."
-  if (( SSH_METER )); then
+  if [[ "$DEPLOY_SSH_METER" == 1 ]]; then
     echo "SSH meter:    experimental OpenSSH network-byte meter enabled; validate accuracy before production use."
     echo "Quota scope:  measured lifetime SSH+Xray bytes; legacy usage excluded; Dropbear unsupported."
   else
     echo "SSH meter:    disabled by default; shared lifetime quota enforcement is unavailable."
   fi
 else
-  echo "Scope note: no SSH/Dropbear or Xray services were installed or configured."
+  if (( UPGRADE )); then
+    echo "Service topology was preserved; the existing full/foundation mode remains unchanged."
+  else
+    echo "Scope note: no SSH/Dropbear or Xray services were installed or configured."
+  fi
+fi
+if (( UPGRADE )) && command -v systemctl >/dev/null 2>&1; then
+  for unit in "${UPGRADE_TIMERS_ACTIVE[@]}"; do systemctl start "$unit"; done
+  echo "Upgrade complete. Prior active managed timers were resumed; Xray/TLS/service topology was preserved."
 fi
