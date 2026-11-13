@@ -1,4 +1,4 @@
-# Neverbandits protocol integration (alpha-3)
+# Neverbandits protocol integration (alpha-4)
 
 Neverbandits creates distinct VLESS UUIDs and Trojan passwords in the protected SQLite database, then generates a root-protected Xray configuration. VLESS uses WebSocket path `/vless` on Xray loopback port 10001; Nginx terminates TLS and routes it on public TCP 443. Trojan remains Xray TLS/TCP on 8443. Xray StatsService stays on `127.0.0.1:10085`. The generated configuration contains protocol credentials and must remain root-owned and readable only by the Xray service group.
 
@@ -31,7 +31,7 @@ The default collector records Xray traffic only. An opt-in experimental OpenSSH 
 
 ## Validation and known limits
 
-The alpha-3 automated tests validate the generated loopback VLESS WS config, Trojan TLS config, connection-sheet details, Nginx routing invariants, and ACME post-challenge port handling. Sandbox integration testing can validate an actual WebSocket handshake and binary forwarding through Nginx to a disposable TCP echo server. The live Ubuntu 24.04 validation also confirmed public HTTP/WSS upgrades, the target sshd banner through the bridge, VLESS WS upgrade, and trusted Trojan TLS. Authenticated Android-client login and other target OS combinations remain unverified.
+The alpha-4 automated tests validate the generated loopback VLESS WS config, Trojan TLS config, connection-sheet details, Nginx routing invariants, ACME post-challenge port handling, and isolation from host-installed Xray configuration. Sandbox integration testing can validate an actual WebSocket handshake and binary forwarding through Nginx to a disposable TCP echo server. The live Ubuntu 24.04 validation also confirmed public HTTP/WSS upgrades, the target sshd banner through the bridge, VLESS WS upgrade, and trusted Trojan TLS. Authenticated Android-client login and other target OS combinations remain unverified.
 
 Xray's [WebSocket transport documentation](https://xtls.github.io/en/config/transports/websocket.html) confirms that WebSocket can be routed by Nginx and describes its path setting. It also recommends evaluating XHTTP for newer deployments because WebSocket can have identifiable traffic characteristics. This alpha uses WS for compatibility and shared-port routing; future protocol work should consider XHTTP without changing the SSHWS service.
 

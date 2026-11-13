@@ -5,7 +5,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.3"
+REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.4"
 DOMAIN=""
 EMAIL=""
 CERT_FILE=""
@@ -22,7 +22,7 @@ QUICK_DEPLOY_SUCCEEDED=0
 
 usage() {
   cat <<'EOF'
-Neverbandits alpha-3 quick installer (publisher: ISPbandits Dev)
+Neverbandits alpha-4 quick installer (publisher: ISPbandits Dev)
 
 Usage:
   sudo bash quick-install.sh [--domain HOSTNAME] [--email EMAIL]
@@ -33,7 +33,7 @@ If no TLS option is supplied, the script interactively offers Let's Encrypt,
 existing certificate files, or a self-signed certificate (testing only).
 
 Fresh installation is for a new VPS only. --upgrade updates a recognized
-Neverbandits alpha-2/alpha-3 install in code-only mode with database backup and rollback;
+Neverbandits alpha-2/alpha-3/alpha-4 install in code-only mode with database backup and rollback;
 it preserves Xray/Nginx/SSHWS/TLS topology and provider firewall rules.
 EOF
 }
@@ -114,9 +114,9 @@ if (( UPGRADE )); then
   esac
   command -v systemctl >/dev/null 2>&1 || fail "A systemd-based managed VPS is required."
   [[ -r /dev/tty ]] || fail "Run the guided upgrade from an interactive terminal."
-  grep -Eq '^version=1\.0\.0-alpha\.(2|3)$' "$MARKER" || fail "This release changes network topology; install it on a fresh VPS rather than upgrading an earlier alpha."
+  grep -Eq '^version=1\.0\.0-alpha\.(2|3|4)$' "$MARKER" || fail "This release changes network topology; install it on a fresh VPS rather than upgrading an earlier alpha."
   grep -Fxq 'ssh_websocket=1' "$MARKER" || fail "The existing install does not have the SSH-WebSocket topology; use a fresh VPS."
-  echo "This code-only update backs up SQLite and preserves the existing alpha-2/alpha-3 Nginx/SSHWS/Xray topology."
+  echo "This code-only update backs up SQLite and preserves the existing alpha-2/alpha-3/alpha-4 Nginx/SSHWS/Xray topology."
   read -r -p "Continue? Type UPGRADE: " CONFIRM </dev/tty
   [[ "$CONFIRM" == UPGRADE ]] || fail "Upgrade cancelled."
   SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"

@@ -151,8 +151,7 @@ class LifetimeQuotaTests(unittest.TestCase):
     def test_xray_only_quota_revoke_does_not_touch_a_same_named_local_user(self):
         database.add_user(self.db, "alice", "2999-12-31")
         database.link_protocol(self.db, "alice", "vless", "alice-vless@xray.invalid")
-        inactive = subprocess.CompletedProcess(["systemctl"], 3, stdout="inactive", stderr="")
-        with patch.object(cli.subprocess, "run", return_value=inactive), \
+        with patch.object(cli, "_reconcile_xray_if_active", return_value=False), \
              patch.object(provisioning, "expire_linux_ssh_account") as expire_ssh:
             cli._quota_revoke(self.db, ["alice"])
         expire_ssh.assert_not_called()

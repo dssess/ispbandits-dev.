@@ -1,6 +1,6 @@
 # Neverbandits — Unified VPS Manager
 
-**Version:** 1.0.0-alpha.3
+**Version:** 1.0.0-alpha.4
 **Publisher:** ISPbandits Dev
 **License:** Proprietary (`LICENSE.proprietary`)
 
@@ -73,7 +73,7 @@ sudo ./install.sh --full \
 
 For Certbot certificates obtained using the standalone HTTP-01 method, add `--certbot-standalone` so renewal hooks stop/start Nginx and reload the updated certificate. Use `--self-signed` only for testing. `./install.sh --check` runs syntax and unit tests without installing system files.
 
-The earlier `v1.0.0-alpha.1` full deployment has a different network topology and cannot be upgraded in place. Install alpha-2 or later on a fresh VPS. Alpha-3 includes an installer fix for TCP connections left in `TIME_WAIT` after the Let's Encrypt HTTP-01 challenge; it can be applied as a code-only upgrade from a recognized alpha-2 or alpha-3 install and preserves the existing service topology.
+The earlier `v1.0.0-alpha.1` full deployment has a different network topology and cannot be upgraded in place. Install alpha-2 or later on a fresh VPS. Alpha-3 fixed the false port conflict caused by TCP connections left in `TIME_WAIT` after Let's Encrypt HTTP-01 validation. Alpha-4 also isolates installer tests from real host Xray files; it can be applied as a code-only upgrade from a recognized alpha-2-or-later install and preserves the existing service topology.
 
 ## Create accounts and get connection details
 

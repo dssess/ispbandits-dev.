@@ -354,7 +354,7 @@ if [[ "$UPGRADE" == 1 ]]; then
   [[ -f "$MARKER" ]] || fail "No installer marker at $MARKER; refusing to upgrade an unknown installation."
   grep -Fxq 'managed_by=ISPbandits-Dev-install.sh' "$MARKER" || fail "Install marker is not recognized."
   grep -Fxq "database_path=$DB_PATH" "$MARKER" || fail "Requested database path differs from the installed path."
-  grep -Eq '^version=1\.0\.0-alpha\.(2|3)$' "$MARKER" || fail "This release changes network topology. Code-only upgrade from an earlier alpha is unsupported; install on a fresh VPS."
+  grep -Eq '^version=1\.0\.0-alpha\.(2|3|4)$' "$MARKER" || fail "This release changes network topology. Code-only upgrade from an earlier alpha is unsupported; install on a fresh VPS."
   DEPLOY_FULL=$(sed -n 's/^full_xray=//p' "$MARKER" | head -n1)
   DEPLOY_SSH_METER=$(sed -n 's/^ssh_meter_experimental=//p' "$MARKER" | head -n1)
   DEPLOY_DOMAIN=$(sed -n 's/^domain=//p' "$MARKER" | head -n1)
@@ -805,7 +805,7 @@ fi
 
 cat > "$MARKER" <<EOF
 managed_by=ISPbandits-Dev-install.sh
-version=1.0.0-alpha.3
+version=1.0.0-alpha.4
 database_path=$DB_PATH
 full_xray=$DEPLOY_FULL
 ssh_meter_experimental=$DEPLOY_SSH_METER
@@ -818,11 +818,11 @@ chmod 0644 "$MARKER"
 
 echo
 if (( UPGRADE )); then
-  echo "Neverbandits alpha-3 code upgrade completed successfully."
+  echo "Neverbandits alpha-4 code upgrade completed successfully."
 elif [[ "$DEPLOY_FULL" == 1 ]]; then
-  echo "Neverbandits alpha-3 full deployment installed successfully."
+  echo "Neverbandits alpha-4 full deployment installed successfully."
 else
-  echo "Neverbandits alpha-3 foundation installed successfully."
+  echo "Neverbandits alpha-4 foundation installed successfully."
 fi
 echo "Application: $PREFIX"
 echo "Database:    $DB_PATH"
