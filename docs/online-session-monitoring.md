@@ -1,4 +1,4 @@
-# Online SSH session monitoring: source behavior and Neverbandits alpha-2
+# Online SSH session monitoring: source behavior and Neverbandits alpha-3
 
 ## What Nginx Bandit’s SSH option 1 → 5 does
 

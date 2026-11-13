@@ -1,4 +1,4 @@
-# Neverbandits protocol integration (alpha-2)
+# Neverbandits protocol integration (alpha-3)
 
 Neverbandits creates distinct VLESS UUIDs and Trojan passwords in the protected SQLite database, then generates a root-protected Xray configuration. VLESS uses WebSocket path `/vless` on Xray loopback port 10001; Nginx terminates TLS and routes it on public TCP 443. Trojan remains Xray TLS/TCP on 8443. Xray StatsService stays on `127.0.0.1:10085`. The generated configuration contains protocol credentials and must remain root-owned and readable only by the Xray service group.
 
@@ -19,7 +19,7 @@ sudo neverbandits account-delete USER --yes
 
 `account-create` uses a no-home `/bin/false` Linux account for SSH. For an SSH identity, the dashboard prompts for a password twice without echo; the CLI supports `--prompt-password`. Before creation, Neverbandits checks the existing sshd's effective password-authentication and TCP-forwarding policy. It never alters the SSH daemon or administrator account. Secrets are sent to account tools over stdin, not command-line arguments, and are not stored in the database except Xray credentials, which remain protected for configuration reconciliation. New credentials and connection links are displayed once in the operator's terminal.
 
-`xray-provision` and credential rotation require the alpha-2 full-install marker, an active Xray service, and active Nginx for VLESS. If activation or a post-activation health check fails, the previous credential state is restored where possible. The one-time credential is contained only in the corresponding import link.
+`xray-provision` and credential rotation require a recognized full alpha-2-or-later install marker, an active Xray service, and active Nginx for VLESS. If activation or a post-activation health check fails, the previous credential state is restored where possible. The one-time credential is contained only in the corresponding import link.
 
 `xray-config` validates through the installed Xray executable before writing a 0640 configuration. `--apply` is intended only after its managed systemd service is installed; it atomically updates configuration and restores the old file if restart fails. Expiry reconciliation stops Xray if its regenerated configuration cannot be activated.
 
@@ -31,7 +31,7 @@ The default collector records Xray traffic only. An opt-in experimental OpenSSH 
 
 ## Validation and known limits
 
-The alpha-2 automated tests validate the generated loopback VLESS WS config, Trojan TLS config, connection-sheet details, and Nginx routing invariants. Sandbox integration testing can validate an actual WebSocket handshake and binary forwarding through Nginx to a disposable TCP echo server. Neither test replaces a full installer run on each target OS or a real Android-client SSH tunnel test.
+The alpha-3 automated tests validate the generated loopback VLESS WS config, Trojan TLS config, connection-sheet details, Nginx routing invariants, and ACME post-challenge port handling. Sandbox integration testing can validate an actual WebSocket handshake and binary forwarding through Nginx to a disposable TCP echo server. The live Ubuntu 24.04 validation also confirmed public HTTP/WSS upgrades, the target sshd banner through the bridge, VLESS WS upgrade, and trusted Trojan TLS. Authenticated Android-client login and other target OS combinations remain unverified.
 
 Xray's [WebSocket transport documentation](https://xtls.github.io/en/config/transports/websocket.html) confirms that WebSocket can be routed by Nginx and describes its path setting. It also recommends evaluating XHTTP for newer deployments because WebSocket can have identifiable traffic characteristics. This alpha uses WS for compatibility and shared-port routing; future protocol work should consider XHTTP without changing the SSHWS service.
 

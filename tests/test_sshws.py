@@ -133,6 +133,20 @@ class SSHWebSocketTests(unittest.TestCase):
         self.assertEqual(2, result)
         create.assert_not_called()
 
+    def test_quick_install_waits_for_acme_timewait_before_full_install(self):
+        source = (ROOT / "quick-install.sh").read_text(encoding="utf-8")
+        certbot = source.index("certbot certonly --standalone")
+        wait = source.index("wait_for_acme_http_timewait", certbot)
+        full_install = source.index('bash "$SOURCE_DIR/install.sh" --full', wait)
+        self.assertLess(certbot, wait)
+        self.assertLess(wait, full_install)
+        self.assertIn("ss -H -tan state time-wait", source)
+
+    def test_full_installer_port_probe_allows_recently_closed_connections(self):
+        source = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)", source)
+        self.assertIn("Required listener address {host}:{port} is unavailable", source)
+
     def test_nginx_template_routes_only_managed_paths_to_loopback_services(self):
         template = (ROOT / "nginx" / "neverbandits.conf.in").read_text(encoding="utf-8")
         rendered = template.replace("@DOMAIN@", "vpn.example.test")

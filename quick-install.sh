@@ -5,7 +5,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.2"
+REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.3"
 DOMAIN=""
 EMAIL=""
 CERT_FILE=""
@@ -22,7 +22,7 @@ QUICK_DEPLOY_SUCCEEDED=0
 
 usage() {
   cat <<'EOF'
-Neverbandits alpha-2 quick installer (publisher: ISPbandits Dev)
+Neverbandits alpha-3 quick installer (publisher: ISPbandits Dev)
 
 Usage:
   sudo bash quick-install.sh [--domain HOSTNAME] [--email EMAIL]
@@ -33,12 +33,29 @@ If no TLS option is supplied, the script interactively offers Let's Encrypt,
 existing certificate files, or a self-signed certificate (testing only).
 
 Fresh installation is for a new VPS only. --upgrade updates a recognized
-Neverbandits alpha-2 install in code-only mode with database backup and rollback;
+Neverbandits alpha-2/alpha-3 install in code-only mode with database backup and rollback;
 it preserves Xray/Nginx/SSHWS/TLS topology and provider firewall rules.
 EOF
 }
 
 fail() { echo "quick-install.sh: $*" >&2; exit 1; }
+
+wait_for_acme_http_timewait() {
+  command -v ss >/dev/null 2>&1 || fail "The ss command is required to safely wait for completed HTTP-01 connections to release port 80."
+  local attempt remaining
+  for attempt in $(seq 1 90); do
+    remaining=$(ss -H -tan state time-wait '( sport = :80 )' 2>/dev/null | wc -l)
+    if [[ "$remaining" == 0 ]]; then
+      echo "HTTP-01 connections released port 80."
+      return 0
+    fi
+    if (( attempt % 10 == 0 )); then
+      echo "Waiting for ${remaining} completed HTTP-01 connection(s) on port 80 to expire (${attempt}s)."
+    fi
+    sleep 1
+  done
+  fail "Completed HTTP-01 connections did not release port 80 within 90 seconds; no service installation was started."
+}
 
 verify_source_archive() {
   python3 - "$1" <<'PY'
@@ -97,9 +114,9 @@ if (( UPGRADE )); then
   esac
   command -v systemctl >/dev/null 2>&1 || fail "A systemd-based managed VPS is required."
   [[ -r /dev/tty ]] || fail "Run the guided upgrade from an interactive terminal."
-  grep -Fxq 'version=1.0.0-alpha.2' "$MARKER" || fail "This release changes network topology; install it on a fresh VPS rather than upgrading an earlier alpha."
+  grep -Eq '^version=1\.0\.0-alpha\.(2|3)$' "$MARKER" || fail "This release changes network topology; install it on a fresh VPS rather than upgrading an earlier alpha."
   grep -Fxq 'ssh_websocket=1' "$MARKER" || fail "The existing install does not have the SSH-WebSocket topology; use a fresh VPS."
-  echo "This code-only update backs up SQLite and preserves the existing alpha-2 Nginx/SSHWS/Xray service topology."
+  echo "This code-only update backs up SQLite and preserves the existing alpha-2/alpha-3 Nginx/SSHWS/Xray topology."
   read -r -p "Continue? Type UPGRADE: " CONFIRM </dev/tty
   [[ "$CONFIRM" == UPGRADE ]] || fail "Upgrade cancelled."
   SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -263,6 +280,7 @@ if [[ "$MODE" == letsencrypt ]]; then
   CERTBOT_ISSUANCE_STARTED=1
   certbot certonly --standalone --non-interactive --agree-tos --email "$EMAIL" \
     --preferred-challenges http -d "$DOMAIN"
+  wait_for_acme_http_timewait
   if ! systemctl list-unit-files certbot.timer --no-legend | grep -q '^certbot.timer'; then
     fail "The certbot package did not provide certbot.timer; refusing to install without automatic certificate renewal."
   fi

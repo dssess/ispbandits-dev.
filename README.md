@@ -1,6 +1,6 @@
 # Neverbandits — Unified VPS Manager
 
-**Version:** 1.0.0-alpha.2
+**Version:** 1.0.0-alpha.3
 **Publisher:** ISPbandits Dev
 **License:** Proprietary (`LICENSE.proprietary`)
 
@@ -13,7 +13,7 @@ SSH WebSocket · VLESS · Trojan · SQLite · Unified traffic records</p>
 
 Neverbandits combines Nevermore-style account creation and connection sheets with ISPbandits Dev's unified SQLite account lifecycle, Xray VLESS/Trojan identities, usage collection, backups, expiry processing, and optional experimental shared-quota enforcement.
 
-> **Alpha warning:** The WebSocket bridge and Nginx routes are implemented and are being tested in an isolated sandbox; the full installer has not yet been exercised on each supported VPS distribution or a live mobile client. Use a **fresh, disposable VPS** for the first deployment. The optional OpenSSH traffic meter and shared lifetime quota remain experimental and are not validated for production billing or hard caps.
+> **Alpha warning:** The full installer and public SSH-WS/WSS, VLESS-WS, and Trojan TLS endpoints have been exercised on Ubuntu 24.04, but real Android-client account login and every supported OS combination remain unverified. Use a **fresh, disposable VPS** for deployment. The optional OpenSSH traffic meter and shared lifetime quota remain experimental and are not validated for production billing or hard caps.
 
 ## What runs on the VPS
 
@@ -73,13 +73,13 @@ sudo ./install.sh --full \
 
 For Certbot certificates obtained using the standalone HTTP-01 method, add `--certbot-standalone` so renewal hooks stop/start Nginx and reload the updated certificate. Use `--self-signed` only for testing. `./install.sh --check` runs syntax and unit tests without installing system files.
 
-The earlier `v1.0.0-alpha.1` full deployment has a different network topology. This alpha intentionally refuses a code-only upgrade from it; test alpha-2 on a fresh VPS rather than migrating a live server. Code-only upgrades are only accepted from a recognized alpha-2 install and do not alter service topology.
+The earlier `v1.0.0-alpha.1` full deployment has a different network topology and cannot be upgraded in place. Install alpha-2 or later on a fresh VPS. Alpha-3 includes an installer fix for TCP connections left in `TIME_WAIT` after the Let's Encrypt HTTP-01 challenge; it can be applied as a code-only upgrade from a recognized alpha-2 or alpha-3 install and preserves the existing service topology.
 
 ## Create accounts and get connection details
 
 The numbered dashboard's **[01] CREATE SSH WEBSOCKET** flow asks for a username, expiry date, selected protocols, and (for SSH) a password entered twice without echo. The password is set through `chpasswd` on stdin. It is not stored in SQLite or in the Nginx configuration. After provisioning, the command prints the connection sheet to the local terminal once; Neverbandits does not publish password-containing account files over unauthenticated HTTP.
 
-Protocol account creation is enabled only on a recognized full alpha-2 deployment. Before creating an account, Neverbandits checks the relevant live services (and the loopback sshd target); it rolls back the new account if a required listener fails before the connection sheet is disclosed. Foundation-only installs are for development/CI and cannot provision network accounts. VLESS UUIDs and Trojan passwords appear only inside their one-time import links.
+Protocol account creation is enabled only on a recognized full alpha-2-or-later deployment. Before creating an account, Neverbandits checks the relevant live services (and the loopback sshd target); it rolls back the new account if a required listener fails before the connection sheet is disclosed. Foundation-only installs are for development/CI and cannot provision network accounts. VLESS UUIDs and Trojan passwords appear only inside their one-time import links.
 
 Example CLI flow:
 
@@ -161,7 +161,7 @@ bash -n install.sh quick-install.sh scripts/refresh-tls.sh scripts/certbot-stop-
 ./install.sh --check
 ```
 
-The remaining release gate is a full installer run on fresh Ubuntu 22.04/24.04 and Debian 12/13 VPS images, a real SSH login forwarded through the bridge, compatibility checks in supported Android clients, and validation with a trusted public certificate. Sandbox tests are not a substitute for those fresh-VPS tests.
+The full installer and a trusted public certificate have been validated on one fresh Ubuntu 24.04 VPS. Remaining release gates include fresh Ubuntu 22.04 and Debian 12/13 installs, an authenticated SSH login forwarded through the bridge, and compatibility checks in supported Android clients.
 
 The sandbox has now passed the optional local integration runner below: it starts Nginx and websockify on dynamically allocated high ports, validates an HTTP and a self-signed WSS WebSocket upgrade, and verifies binary bytes reach a temporary TCP echo service and return intact. It does not touch system Nginx configuration or use the host's ports 80/443. Run the same check on a development machine with Nginx, `/usr/bin/websockify`, and OpenSSL installed:
 
@@ -169,7 +169,7 @@ The sandbox has now passed the optional local integration runner below: it start
 python3 scripts/test-sshws-integration.py
 ```
 
-Passing that test confirms the proxy/bridge protocol path only. It does **not** prove login against sshd, real Android app payload compatibility, certificate trust on clients, or a successful alpha-2 install on every supported operating system.
+Passing that test confirms the local proxy/bridge protocol path only. It does **not** prove authenticated login against sshd, real Android app payload compatibility, or successful installation on every supported operating system. The Ubuntu 24.04 VPS test also confirmed the real sshd banner traverses the public WebSocket bridge, but did not test a user credential.
 
 ## Branding and copyright
 
