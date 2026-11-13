@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import sqlite3
 import tempfile
 import unittest
@@ -113,6 +114,10 @@ class AccountLifecycleTests(unittest.TestCase):
         conn.close()
         old_secret = database.get_xray_protocol_state(self.db, "alice", "vless")["secret"]
         with patch.object(cli.os, "geteuid", return_value=0), \
+             patch.object(cli, "_install_info", return_value={
+                 "full_xray": "1", "domain": "vpn.example.test"}), \
+             patch.object(cli, "_xray_service_active", return_value=True), \
+             patch.object(cli, "_service_active", return_value=True), \
              patch.object(cli, "_reconcile_xray_if_active", side_effect=[RuntimeError("restart failed"), False]):
             result = cli.main(["--db", str(self.db), "xray-provision", "alice", "vless", "--rotate"])
         self.assertEqual(2, result)
@@ -120,6 +125,33 @@ class AccountLifecycleTests(unittest.TestCase):
         account = database.get_account(self.db, "alice")
         vless = next(p for p in account["protocols"] if p["protocol"] == "vless")
         self.assertEqual("legacy-alice-vless@xray.invalid", vless["identity"])
+
+    def test_xray_provision_refuses_inactive_service_before_secret_creation(self):
+        old_secret = database.get_xray_protocol_state(self.db, "alice", "vless")["secret"]
+        with patch.object(cli.os, "geteuid", return_value=0), \
+             patch.object(cli, "_install_info", return_value={
+                 "full_xray": "1", "domain": "vpn.example.test"}), \
+             patch.object(cli, "_xray_service_active", return_value=False), \
+             patch("sys.stderr", new_callable=io.StringIO):
+            result = cli.main(["--db", str(self.db), "xray-provision", "alice", "vless", "--rotate"])
+        self.assertEqual(2, result)
+        self.assertEqual(old_secret, database.get_xray_protocol_state(self.db, "alice", "vless")["secret"])
+
+    def test_xray_provision_discloses_secret_only_in_import_link(self):
+        output = io.StringIO()
+        with patch.object(cli.os, "geteuid", return_value=0), \
+             patch.object(cli, "_install_info", return_value={
+                 "full_xray": "1", "domain": "vpn.example.test"}), \
+             patch.object(cli, "_xray_service_active", return_value=True), \
+             patch.object(cli, "_service_active", return_value=True), \
+             patch.object(cli, "_reconcile_xray_if_active", return_value=True), \
+             patch("sys.stdout", output):
+            result = cli.main(["--db", str(self.db), "xray-provision", "alice", "vless", "--rotate"])
+        self.assertEqual(0, result)
+        secret = database.get_xray_protocol_state(self.db, "alice", "vless")["secret"]
+        rendered = output.getvalue()
+        self.assertEqual(1, rendered.count(secret))
+        self.assertIn(f"vless://{secret}@vpn.example.test:443", rendered)
 
     def test_ssh_preflight_requires_password_and_tcp_forwarding(self):
         sshd = "port 2222\npasswordauthentication yes\nallowtcpforwarding yes\ndisableforwarding no\nauthenticationmethods any\n"

@@ -1,0 +1,28 @@
+[Unit]
+Description=Neverbandits SSH over WebSocket bridge
+Documentation=https://github.com/novnc/websockify
+After=network-online.target ssh.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ispbd-ws
+Group=ispbd-ws
+ExecStart=/usr/bin/websockify 127.0.0.1:6080 127.0.0.1:@SSH_PORT@
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

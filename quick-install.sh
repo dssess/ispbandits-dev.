@@ -5,17 +5,24 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.1"
+REPO_ARCHIVE="https://codeload.github.com/dssess/ispbandits-dev./tar.gz/refs/tags/v1.0.0-alpha.2"
 DOMAIN=""
 EMAIL=""
 CERT_FILE=""
 KEY_FILE=""
 MODE=""
 UPGRADE=0
+CERTBOT_PACKAGE_INSTALLED_BY_RUN=0
+CERTBOT_TIMER_RESTORE=0
+CERTBOT_TIMER_ENABLED_BEFORE=0
+CERTBOT_TIMER_ACTIVE_BEFORE=0
+CERTBOT_CERT_EXISTED_BEFORE=0
+CERTBOT_ISSUANCE_STARTED=0
+QUICK_DEPLOY_SUCCEEDED=0
 
 usage() {
   cat <<'EOF'
-ISPbandits Dev v1 alpha quick installer
+Neverbandits alpha-2 quick installer (publisher: ISPbandits Dev)
 
 Usage:
   sudo bash quick-install.sh [--domain HOSTNAME] [--email EMAIL]
@@ -26,8 +33,8 @@ If no TLS option is supplied, the script interactively offers Let's Encrypt,
 existing certificate files, or a self-signed certificate (testing only).
 
 Fresh installation is for a new VPS only. --upgrade updates a recognized
-ISPbandits install in code-only mode with database backup and rollback; it does
-not change Xray/TLS/service topology or provider firewall rules.
+Neverbandits alpha-2 install in code-only mode with database backup and rollback;
+it preserves Xray/Nginx/SSHWS/TLS topology and provider firewall rules.
 EOF
 }
 
@@ -90,7 +97,9 @@ if (( UPGRADE )); then
   esac
   command -v systemctl >/dev/null 2>&1 || fail "A systemd-based managed VPS is required."
   [[ -r /dev/tty ]] || fail "Run the guided upgrade from an interactive terminal."
-  echo "This code-only upgrade backs up SQLite and leaves Xray/TLS/service topology unchanged."
+  grep -Fxq 'version=1.0.0-alpha.2' "$MARKER" || fail "This release changes network topology; install it on a fresh VPS rather than upgrading an earlier alpha."
+  grep -Fxq 'ssh_websocket=1' "$MARKER" || fail "The existing install does not have the SSH-WebSocket topology; use a fresh VPS."
+  echo "This code-only update backs up SQLite and preserves the existing alpha-2 Nginx/SSHWS/Xray service topology."
   read -r -p "Continue? Type UPGRADE: " CONFIRM </dev/tty
   [[ "$CONFIRM" == UPGRADE ]] || fail "Upgrade cancelled."
   SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -108,7 +117,7 @@ if (( UPGRADE )); then
   fi
   [[ -f "$SOURCE_DIR/install.sh" && -f "$SOURCE_DIR/pyproject.toml" ]] || fail "Project source is incomplete."
   bash "$SOURCE_DIR/install.sh" --upgrade
-  echo "Upgrade complete. Review the updated guide and run: sudo ispbandits verify"
+  echo "Upgrade complete. Review the updated guide and run: sudo neverbandits verify"
   exit 0
 fi
 
@@ -174,12 +183,12 @@ cat <<EOF
 
 INSTALLATION WARNING
 This alpha has not yet passed production client-connectivity testing. Use a fresh,
-disposable VPS. It will install Xray and may occupy TCP 443 and 8443. SSH per-user
+disposable VPS. It installs Nginx on TCP 80/443, SSH-over-WebSocket, and Xray;
+Trojan uses TCP 8443. SSH per-user
 traffic metering and shared quota enforcement are experimental and not production-validated.
 
-Before continuing, point $DOMAIN to this VPS, ensure TCP 443 and 8443 are available,
-and allow those ports through the VPS/provider firewall. Let's Encrypt additionally
-needs inbound TCP 80 for certificate issuance and renewal. The script cannot edit
+Before continuing, point $DOMAIN to this VPS, ensure TCP 80, 443, and 8443 are available,
+and allow those ports through the VPS/provider firewall. The script cannot edit
 your provider firewall. It will not alter administrator SSH settings.
 EOF
 
@@ -187,28 +196,40 @@ EOF
 read -r -p "Continue on this fresh VPS? Type YES to proceed: " CONFIRM </dev/tty
 [[ "$CONFIRM" == YES ]] || fail "Installation cancelled."
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-if [[ "$MODE" == letsencrypt ]]; then
-  apt-get install -y ca-certificates curl tar python3 certbot
-else
-  apt-get install -y ca-certificates curl tar python3
-fi
-
-if [[ "$MODE" == letsencrypt ]]; then
-  certbot certonly --standalone --non-interactive --agree-tos --email "$EMAIL" \
-    --preferred-challenges http -d "$DOMAIN"
-  if ! systemctl list-unit-files certbot.timer --no-legend | grep -q '^certbot.timer'; then
-    fail "The certbot package did not provide certbot.timer; refusing to install without automatic certificate renewal."
-  fi
-  systemctl enable --now certbot.timer
-  CERT_FILE="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-  KEY_FILE="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-fi
-
+command -v curl >/dev/null 2>&1 || fail "curl is required to fetch and verify the pinned release source."
+command -v python3 >/dev/null 2>&1 || fail "Python 3 is required to verify the pinned source archive; install it before continuing."
+command -v tar >/dev/null 2>&1 || fail "tar is required to extract the verified source archive; install it before continuing."
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP_DIR=""
-cleanup() { [[ -z "$TMP_DIR" ]] || rm -rf -- "$TMP_DIR"; }
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  if (( rc != 0 && QUICK_DEPLOY_SUCCEEDED == 0 )); then
+    if (( CERTBOT_TIMER_RESTORE )); then
+      if (( CERTBOT_TIMER_ENABLED_BEFORE )); then
+        systemctl enable certbot.timer >/dev/null 2>&1 || true
+      else
+        systemctl disable certbot.timer >/dev/null 2>&1 || true
+      fi
+      if (( CERTBOT_TIMER_ACTIVE_BEFORE )); then
+        systemctl start certbot.timer >/dev/null 2>&1 || true
+      else
+        systemctl stop certbot.timer >/dev/null 2>&1 || true
+      fi
+    fi
+    if (( CERTBOT_ISSUANCE_STARTED && CERTBOT_CERT_EXISTED_BEFORE == 0 )) && command -v certbot >/dev/null 2>&1; then
+      certbot delete --cert-name "$DOMAIN" --non-interactive --quiet >/dev/null 2>&1 ||
+        echo "WARNING: Could not automatically remove the Let's Encrypt certificate created during the failed installation." >&2
+    fi
+    if (( CERTBOT_PACKAGE_INSTALLED_BY_RUN )) &&
+       dpkg-query -W -f='${db:Status-Status}' certbot 2>/dev/null | grep -qx installed; then
+      DEBIAN_FRONTEND=noninteractive apt-get purge -y certbot >/dev/null 2>&1 ||
+        echo "WARNING: Could not automatically purge the newly installed Certbot package." >&2
+    fi
+  fi
+  if [[ -n "$TMP_DIR" ]]; then rm -rf -- "$TMP_DIR"; fi
+  exit "$rc"
+}
 trap cleanup EXIT
 if [[ ! -f "$SOURCE_DIR/install.sh" || ! -f "$SOURCE_DIR/pyproject.toml" ]]; then
   TMP_DIR=$(mktemp -d /tmp/ispbandits-quick-install.XXXXXX)
@@ -219,27 +240,63 @@ if [[ ! -f "$SOURCE_DIR/install.sh" || ! -f "$SOURCE_DIR/pyproject.toml" ]]; the
   SOURCE_DIR="$TMP_DIR/source"
 fi
 [[ -f "$SOURCE_DIR/install.sh" && -f "$SOURCE_DIR/pyproject.toml" ]] || fail "Project source is incomplete."
+bash "$SOURCE_DIR/install.sh" --preflight-only --domain "$DOMAIN"
+
+export DEBIAN_FRONTEND=noninteractive
+if [[ "$MODE" == letsencrypt ]]; then
+  CERTBOT_TIMER_RESTORE=1
+  systemctl is-enabled --quiet certbot.timer 2>/dev/null && CERTBOT_TIMER_ENABLED_BEFORE=1 || true
+  systemctl is-active --quiet certbot.timer 2>/dev/null && CERTBOT_TIMER_ACTIVE_BEFORE=1 || true
+  [[ ! -e "/etc/letsencrypt/live/$DOMAIN" ]] || CERTBOT_CERT_EXISTED_BEFORE=1
+  if ! dpkg-query -W -f='${db:Status-Status}' certbot 2>/dev/null | grep -qx installed; then
+    CERTBOT_PACKAGE_INSTALLED_BY_RUN=1
+  fi
+fi
+apt-get update
+if [[ "$MODE" == letsencrypt ]]; then
+  apt-get install -y ca-certificates curl tar python3 unzip openssl certbot
+else
+  apt-get install -y ca-certificates curl tar python3 unzip openssl
+fi
+
+if [[ "$MODE" == letsencrypt ]]; then
+  CERTBOT_ISSUANCE_STARTED=1
+  certbot certonly --standalone --non-interactive --agree-tos --email "$EMAIL" \
+    --preferred-challenges http -d "$DOMAIN"
+  if ! systemctl list-unit-files certbot.timer --no-legend | grep -q '^certbot.timer'; then
+    fail "The certbot package did not provide certbot.timer; refusing to install without automatic certificate renewal."
+  fi
+  systemctl enable --now certbot.timer
+  CERT_FILE="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+  KEY_FILE="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+fi
 
 case "$MODE" in
   letsencrypt|existing)
-    bash "$SOURCE_DIR/install.sh" --full --domain "$DOMAIN" --cert-file "$CERT_FILE" --key-file "$KEY_FILE"
+    if [[ "$MODE" == letsencrypt ]]; then
+      bash "$SOURCE_DIR/install.sh" --full --domain "$DOMAIN" --cert-file "$CERT_FILE" --key-file "$KEY_FILE" --certbot-standalone
+    else
+      bash "$SOURCE_DIR/install.sh" --full --domain "$DOMAIN" --cert-file "$CERT_FILE" --key-file "$KEY_FILE"
+    fi
     ;;
   self-signed)
     bash "$SOURCE_DIR/install.sh" --full --domain "$DOMAIN" --self-signed
     ;;
   *) fail "Internal TLS mode error." ;;
 esac
+QUICK_DEPLOY_SUCCEEDED=1
 
 cat <<'EOF'
 
 Next: create an account with:
-  sudo ispbandits account-create USERNAME --expires YYYY-MM-DD
+  sudo neverbandits menu
 
-Open/keep open TCP 443 and 8443 in the provider firewall. With Let's Encrypt,
-keep TCP 80 reachable for automatic certificate renewal. Review the README for
+Open TCP 80, 443, and 8443 in the provider firewall. TCP 80 serves plain SSH-WS
+and is also used for Let's Encrypt renewal; TCP 443 serves SSH-WSS/VLESS-WS.
+Review the README for
 limitations and management commands.
 EOF
 
-if [[ -t 0 && -x /usr/local/bin/ispbandits ]]; then
-  /usr/local/bin/ispbandits menu
+if [[ -t 0 && -x /usr/local/bin/neverbandits ]]; then
+  /usr/local/bin/neverbandits menu
 fi

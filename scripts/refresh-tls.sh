@@ -7,6 +7,7 @@ ENV_FILE=${ISPBD_TLS_ENV:-/etc/ispbandits-dev/tls-source.env}
 TLS_ROOT=${ISPBD_TLS_ROOT:-/etc/ispbandits-dev/tls}
 SERVICE=${ISPBD_XRAY_SERVICE:-ispbandits-xray.service}
 TLS_GROUP=${ISPBD_TLS_GROUP:-xray}
+NGINX_SERVICE=${ISPBD_NGINX_SERVICE:-nginx.service}
 
 [[ ${EUID} -eq 0 ]] || { echo 'Must run as root.' >&2; exit 2; }
 [[ -r "$ENV_FILE" ]] || { echo 'TLS source settings are missing.' >&2; exit 1; }
@@ -48,5 +49,8 @@ if [[ "$CURRENT" != "$TARGET" ]]; then
   mv -Tf -- "$LINK" "$TLS_ROOT/current"
   if systemctl is-active --quiet "$SERVICE"; then
     systemctl restart "$SERVICE"
+  fi
+  if systemctl is-active --quiet "$NGINX_SERVICE"; then
+    systemctl reload "$NGINX_SERVICE"
   fi
 fi

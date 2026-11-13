@@ -1,4 +1,4 @@
-"""Interactive ISPbandits Dev administration dashboard."""
+"""Interactive Neverbandits administration dashboard."""
 from __future__ import annotations
 
 import datetime as dt
@@ -157,23 +157,26 @@ def _server_summary(db_path: Path) -> list[str]:
 
 def _show_dashboard(db_path: Path) -> None:
     print(_frame())
-    print(_box_line(_paint("ISPbandits Dev — VPS Administration", _Colors.WHITE).center(WIDTH)))
+    print(_box_line(_paint("Neverbandits — VPS Administration", _Colors.WHITE).center(WIDTH)))
     print(_paint("├" + "─" * WIDTH + "┤", _Colors.CYAN))
     for line in _server_summary(db_path):
         print(_box_line("  " + line))
     print(_paint("├" + "─" * WIDTH + "┤", _Colors.CYAN))
     services = [
         _service_badge("XRAY", "ispbandits-xray.service"),
+        _service_badge("NGINX", "nginx.service"),
+        _service_badge("SSH-WS", "neverbandits-websockify.service"),
         _service_badge("COLLECTOR", "ispbandits-collect.timer"),
         _service_badge("SSH METER", "ispbandits-ssh-meter.timer"),
         _service_badge("EXPIRY", "ispbandits-expire.timer"),
         _service_badge("TLS", "ispbandits-tls-refresh.timer"),
     ]
     print(_box_line("  " + "   ".join(services[:3])))
-    print(_box_line("  " + "   ".join(services[3:])))
+    print(_box_line("  " + "   ".join(services[3:6])))
+    print(_box_line("  " + services[6]))
     print(_bottom_frame())
     print()
-    print(f"  {_paint('[01]', _Colors.WHITE)}  CREATE ACCOUNT          {_paint('[02]', _Colors.WHITE)}  ACCOUNT USAGE")
+    print(f"  {_paint('[01]', _Colors.WHITE)}  CREATE SSH WEBSOCKET     {_paint('[02]', _Colors.WHITE)}  ACCOUNT USAGE")
     print(f"  {_paint('[03]', _Colors.WHITE)}  ONLINE SSH               {_paint('[04]', _Colors.WHITE)}  SERVICE STATUS")
     print(f"  {_paint('[05]', _Colors.WHITE)}  RUN EXPIRY CHECK         {_paint('[06]', _Colors.WHITE)}  BACKUP DATABASE")
     print(f"  {_paint('[07]', _Colors.WHITE)}  VERIFY DATABASE          {_paint('[08]', _Colors.WHITE)}  SET LIFETIME QUOTA")
@@ -183,7 +186,7 @@ def _show_dashboard(db_path: Path) -> None:
     print(f"  {_paint('[15]', _Colors.WHITE)}  DELETE ACCOUNT            {_paint('[16]', _Colors.WHITE)}  RESTORE DATABASE")
     print(f"  {_paint('[00]', _Colors.RED)}  EXIT")
     print()
-    print(_paint(f"  ISPbandits Dev v1 alpha  |  {NOTICE}", _Colors.CYAN))
+    print(_paint(f"  Neverbandits alpha  |  {NOTICE}", _Colors.CYAN))
     print(_paint("  Experimental SSH meter is opt-in; validate per-session attribution before quota use.", _Colors.YELLOW))
 
 
@@ -219,9 +222,9 @@ def _create_account(db_path: Path) -> None:
             print("Quota must be zero or greater.")
             return
         print("\nProtocols:")
-        print("  1) OpenSSH + VLESS + Trojan (recommended)")
+        print("  1) SSH WebSocket + VLESS + Trojan (recommended)")
         print("  2) VLESS + Trojan only")
-        print("  3) OpenSSH only")
+        print("  3) SSH WebSocket only")
         selection = input("Choose protocols [1]: ").strip() or "1"
         protocol_sets = {
             "1": ("openssh", "vless", "trojan"),
@@ -231,9 +234,11 @@ def _create_account(db_path: Path) -> None:
         if selection not in protocol_sets:
             print("Choose 1, 2, or 3.")
             return
+        password_option = ("--prompt-password",) if "openssh" in protocol_sets[selection] else ()
         print("\nCreating account. Store any generated credentials securely; they are shown only once.\n")
         _call_cli(db_path, "account-create", username, "--expires", expiry,
-                  "--limit-gb", str(quota), "--protocols", *protocol_sets[selection])
+                  "--limit-gb", str(quota), "--protocols", *protocol_sets[selection],
+                  *password_option)
     except (EOFError, KeyboardInterrupt):
         print("\nAccount creation cancelled.")
     except ValueError:
@@ -316,6 +321,8 @@ def _restore_database(db_path: Path) -> None:
 def _service_status() -> None:
     units = (
         ("Xray proxy", "ispbandits-xray.service"),
+        ("Nginx frontend", "nginx.service"),
+        ("SSH-WebSocket bridge", "neverbandits-websockify.service"),
         ("Xray-only collector", "ispbandits-collect.timer"),
         ("Experimental SSH meter", "ispbandits-ssh-meter.timer"),
         ("Full quota collector", "ispbandits-ssh-collect.timer"),
@@ -341,7 +348,7 @@ def run_menu(db_path: Path) -> int:
             _show_dashboard(db_path)
             choice = input(" Select menu: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nExiting ISPbandits Dev.")
+            print("\nExiting Neverbandits.")
             return 0
         if choice in {"0", "00", "q", "Q"}:
             print("Goodbye.")

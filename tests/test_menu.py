@@ -41,7 +41,8 @@ class MenuTests(unittest.TestCase):
                 menu._show_dashboard(db_path)
         screen = output.getvalue()
         self.assertIn("┌", screen)
-        self.assertIn("ISPbandits Dev — VPS Administration", screen)
+        self.assertIn("Neverbandits — VPS Administration", screen)
+        self.assertIn("SSH-WS", screen)
         self.assertIn("Measured traffic:", screen)
         self.assertIn("[08]  SET LIFETIME QUOTA", screen)
         self.assertIn("© 2026 ISPbandits Dev. All rights reserved.", screen)
@@ -51,7 +52,7 @@ class MenuTests(unittest.TestCase):
         with patch("ispbandits.menu.sys.stdin", io.StringIO()), \
              patch("sys.stdout", output):
             self.assertEqual(cli.main([]), 2)
-        self.assertIn("usage: ispbandits", output.getvalue())
+        self.assertIn("usage: neverbandits", output.getvalue())
 
 
 if __name__ == "__main__":

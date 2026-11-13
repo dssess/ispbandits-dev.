@@ -1,35 +1,41 @@
-# Xray integration notes (v1 work in progress)
+# Neverbandits protocol integration (alpha-2)
 
-The project now creates distinct VLESS UUIDs and Trojan passwords in the root-only SQLite database and can generate a protected Xray configuration. The full fresh-install path can install the official pinned Xray release and a hardened systemd service. The generated config uses two TCP+TLS inbounds (VLESS on 443 and Trojan on 8443 by default), a loopback-only API on 127.0.0.1:10085, `HandlerService` and `StatsService`, and per-user upload/download statistics keyed by unique email identities. The Xray config contains client credentials and must remain root-owned and readable only by the Xray service group.
+Neverbandits creates distinct VLESS UUIDs and Trojan passwords in the protected SQLite database, then generates a root-protected Xray configuration. VLESS uses WebSocket path `/vless` on Xray loopback port 10001; Nginx terminates TLS and routes it on public TCP 443. Trojan remains Xray TLS/TCP on 8443. Xray StatsService stays on `127.0.0.1:10085`. The generated configuration contains protocol credentials and must remain root-owned and readable only by the Xray service group.
 
-A valid certificate chain and its matching private key are required. The certificate must cover the hostname clients use. Do not use TLS `allowInsecure` as a production substitute for a trusted certificate. The full installer checks the domain, certificate, and key, copies credentials into a protected Xray-readable location, and enables a 30-minute refresh timer so renewals are picked up. The installer also enables a daily expiry timer; it locks due SSH accounts and removes due Xray identities from the generated config.
+SSH-over-WebSocket is a separate path: public Nginx `/sshws` routes to a loopback-only websockify service, which forwards to the existing sshd port discovered from `sshd -T`. Plain WebSocket is available on port 80 and TLS WebSocket on port 443. The installer does not change OpenSSH settings, install another SSH daemon, or adjust the firewall. Full deployment requires a fresh host, active existing sshd, free public ports, and matching DNS/TLS configuration. See [the SSHWS architecture note](sshws-architecture.md).
 
-## Commands added
+## Commands
 
 ```text
-ispbandits account-create USER --expires YYYY-MM-DD [--protocols openssh vless trojan]
-ispbandits xray-provision USER vless|trojan [--rotate]
-sudo ispbandits xray-config --cert-file CERT --key-file KEY [--check-only]
-sudo ispbandits online
-sudo ispbandits renew USER --expires YYYY-MM-DD
-sudo ispbandits disable USER
-sudo ispbandits enable USER
-sudo ispbandits account-delete USER --yes
+neverbandits account-create USER --expires YYYY-MM-DD [--protocols openssh vless trojan] [--prompt-password]
+neverbandits xray-provision USER vless|trojan [--rotate]
+sudo neverbandits xray-config --cert-file CERT --key-file KEY [--check-only]
+sudo neverbandits online
+sudo neverbandits renew USER --expires YYYY-MM-DD
+sudo neverbandits disable USER
+sudo neverbandits enable USER
+sudo neverbandits account-delete USER --yes
 ```
 
-`account-create` uses the Nginx Bandit-compatible no-home `/bin/false` system account pattern for SSH and prints the generated SSH password once. Before provisioning it checks the existing sshd's effective password-authentication and TCP-forwarding policy; it does not alter SSH daemon configuration or the administrator account. VLESS/Trojan secrets are stored in the root-only DB and printed once. `xray-config` validates through an installed Xray executable before writing a 0640 configuration. `--apply` is intended only after the managed systemd service has been installed; it attempts an atomic config update and restores the old file if restart fails. Expiry reconciliation fails closed by stopping Xray if its regenerated config cannot be activated.
+`account-create` uses a no-home `/bin/false` Linux account for SSH. For an SSH identity, the dashboard prompts for a password twice without echo; the CLI supports `--prompt-password`. Before creation, Neverbandits checks the existing sshd's effective password-authentication and TCP-forwarding policy. It never alters the SSH daemon or administrator account. Secrets are sent to account tools over stdin, not command-line arguments, and are not stored in the database except Xray credentials, which remain protected for configuration reconciliation. New credentials and connection links are displayed once in the operator's terminal.
 
-SSH online view is best-effort: it counts matching SSH/Dropbear daemon processes owned by managed local accounts. It is explicitly not a unique-device count or a protocol-level session guarantee; validate it on each target's OpenSSH/Dropbear build before relying on it operationally.
+`xray-provision` and credential rotation require the alpha-2 full-install marker, an active Xray service, and active Nginx for VLESS. If activation or a post-activation health check fails, the previous credential state is restored where possible. The one-time credential is contained only in the corresponding import link.
+
+`xray-config` validates through the installed Xray executable before writing a 0640 configuration. `--apply` is intended only after its managed systemd service is installed; it atomically updates configuration and restores the old file if restart fails. Expiry reconciliation stops Xray if its regenerated configuration cannot be activated.
 
 ## Traffic and online status
 
-Xray user statistics require a `stats` object, the per-level `statsUserUplink` and `statsUserDownlink` policy flags, and unique non-empty user `email` identities. The Xray collector maps those identities to exactly one VLESS or Trojan account. `statsUserOnline` is enabled in the generated policy, but the management CLI does not yet display Xray online counts. Xray's online map is based on activity in the preceding 20 seconds and may not count loopback client addresses; use traffic-counter deltas for a robust “active recently” approximation when a local proxy is in front.
+Xray statistics require a `stats` object, per-level `statsUserUplink` and `statsUserDownlink` policy flags, and unique non-empty user `email` identities. The collector maps each identity to one VLESS or Trojan account. `statsUserOnline` is enabled, but the management CLI does not yet display Xray online counts. SSH online status counts matching sshd processes and is not a unique-device count.
 
-The full installer runs the collector once per minute with explicit `--xray-only` mode, so VLESS/Trojan usage can be recorded without pretending SSH is measured. An opt-in prototype OpenSSH producer now writes a root-only nftables-counter snapshot, and a separate full collector can enforce shared lifetime quotas. This implementation is experimental, counts IP-layer bytes, and has no live validation on a target VPS. Do not use it for billing or hard caps until known-byte transfer, reconnect, restart, concurrency, and failure tests pass on each supported target OS.
+The default collector records Xray traffic only. An opt-in experimental OpenSSH producer samples nftables counters and a separate collector can enforce shared lifetime quotas. The meter counts IP-layer bytes, not pure payload, and may overshoot between polls. It has not passed live validation on all supported OS/kernel/OpenSSH combinations; do not use it for billing or hard caps.
 
-## Validation performed
+## Validation and known limits
 
-The configuration generator was checked against the official Xray 26.10.31 Linux amd64 binary. The downloaded archive SHA-256 was verified against its GitHub release asset metadata (`e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214`). A temporary self-signed certificate and disposable DB with one VLESS and one Trojan identity passed `xray run -test -config`; an empty-user first-boot config also passed. The TLS refresh hook passed a disposable smoke test covering cert/key match, atomic symlink publication, service-group key readability, and idempotency. These are local sandbox tests only—not a full installer run on a target OS, production deployment, or client connectivity test.
+The alpha-2 automated tests validate the generated loopback VLESS WS config, Trojan TLS config, connection-sheet details, and Nginx routing invariants. Sandbox integration testing can validate an actual WebSocket handshake and binary forwarding through Nginx to a disposable TCP echo server. Neither test replaces a full installer run on each target OS or a real Android-client SSH tunnel test.
+
+Xray's [WebSocket transport documentation](https://xtls.github.io/en/config/transports/websocket.html) confirms that WebSocket can be routed by Nginx and describes its path setting. It also recommends evaluating XHTTP for newer deployments because WebSocket can have identifiable traffic characteristics. This alpha uses WS for compatibility and shared-port routing; future protocol work should consider XHTTP without changing the SSHWS service.
+
+The upstream [websockify project](https://github.com/novnc/websockify) describes its WebSocket-to-TCP bridge. Official archives list websockify in [Ubuntu 22.04](https://packages.ubuntu.com/jammy/websockify), [Ubuntu 24.04](https://packages.ubuntu.com/noble/websockify), [Debian 12](https://packages.debian.org/bookworm/websockify), and [Debian 13](https://packages.debian.org/trixie/websockify). Ubuntu hosts may need the Universe repository enabled by their administrator.
 
 ## Official references
 
@@ -39,6 +45,5 @@ The configuration generator was checked against the official Xray 26.10.31 Linux
 - [Xray traffic statistics](https://xtls.github.io/en/config/stats.html)
 - [Xray VLESS inbound](https://xtls.github.io/en/config/inbounds/vless.html)
 - [Xray Trojan inbound](https://xtls.github.io/en/config/inbounds/trojan.html)
-- [Xray TLS transport](https://xtls.github.io/en/config/transports/tls.html)
+- [Xray WebSocket transport](https://xtls.github.io/en/config/transports/websocket.html)
 - [Xray CLI](https://xtls.github.io/en/document/command.html)
-- [Xray `statsUserOnline` discussion and loopback caveat](https://github.com/XTLS/Xray-core/discussions/5769)

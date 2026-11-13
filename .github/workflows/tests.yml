@@ -36,3 +36,15 @@ jobs:
         run: bash -n install.sh quick-install.sh scripts/refresh-tls.sh
       - name: Validate installer check mode
         run: ./install.sh --check
+
+  sshws-integration:
+    name: Nginx and websockify bridge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install distro bridge packages
+        run: sudo apt-get update && sudo apt-get install -y nginx websockify openssl
+      - name: Test HTTP/WSS WebSocket forwarding
+        run: python3 scripts/test-sshws-integration.py

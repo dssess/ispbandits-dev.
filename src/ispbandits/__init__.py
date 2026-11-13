@@ -1,6 +1,6 @@
-"""ISPbandits Dev VPS management foundation.
+"""Neverbandits VPS management platform by ISPbandits Dev.
 
 Copyright (c) 2026 ISPbandits Dev. All rights reserved.
 Proprietary software; see LICENSE.proprietary.
 """
-__version__ = "1.0.0-alpha.1"
+__version__ = "1.0.0-alpha.2"

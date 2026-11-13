@@ -166,20 +166,22 @@ def reactivate_linux_ssh_account(username: str, expiry_date: str) -> None:
 def create_managed_account(database_path: Path | str, username: str, expiry_date: str,
                            max_logins: int = 2,
                            protocols: tuple[str, ...] = ("openssh", "vless", "trojan"),
-                           data_limit: int = 0) -> dict[str, object]:
+                           data_limit: int = 0,
+                           ssh_password: str | None = None) -> dict[str, object]:
     """Create one account and selected protocol identities with rollback on error."""
     allowed = {"openssh", "vless", "trojan"}
     if not protocols or len(set(protocols)) != len(protocols) or set(protocols) - allowed:
         raise ValueError("Select one or more unique protocols from openssh, vless, trojan")
     ssh_selected = "openssh" in protocols
-    ssh_password = None
+    if not ssh_selected:
+        ssh_password = None
     db_created = False
     linux_created = False
     credentials: list[dict[str, str]] = []
 
     database.initialize(database_path)
     if ssh_selected:
-        ssh_password = create_linux_ssh_account(username, expiry_date)
+        ssh_password = create_linux_ssh_account(username, expiry_date, ssh_password)
         linux_created = True
     try:
         ssh_protocols = tuple(p for p in protocols if p == "openssh")

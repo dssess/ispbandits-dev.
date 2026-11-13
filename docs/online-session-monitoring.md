@@ -1,4 +1,4 @@
-# Online SSH session monitoring: source behavior and v1 plan
+# Online SSH session monitoring: source behavior and Neverbandits alpha-2
 
 ## What Nginx Bandit’s SSH option 1 → 5 does
 
@@ -10,11 +10,11 @@ This is a useful quick online-presence view, but the code counts matching proces
 
 The same daemon also reads `/proc/<pid>/io` (`rchar` and `wchar`) for its older bandwidth field. Those are process I/O counters, not a verified network-byte meter. Keep online-session detection and traffic accounting as separate features with separate acceptance tests. [3]
 
-## ISPbandits Dev v1 behavior
+## Neverbandits behavior
 
-The target v1 admin view should include an **Online SSH Sessions** command showing each managed SSH/Dropbear username, the observed active-session count, and the observation timestamp or freshness state. The default label should be “sessions” or “active SSH processes,” not “devices.” Show “none detected” distinctly from “monitor unavailable” or “snapshot stale.”
+The cyan-framed admin menu provides **ONLINE SSH** and the CLI exposes `neverbandits online`. It reports approximate matching SSH/Dropbear process counts for managed users and does not claim a unique device count. Xray live-session display is not implemented; Xray traffic counters are not proof that a user is currently connected.
 
-The monitor should use managed account identities only, avoid printing client credentials, and write status through an atomic root-only snapshot or database transaction. A monitor failure must not alter or delete the user account. This is status reporting, not session-killing or quota enforcement.
+The view uses managed account identities and does not print client credentials. A monitor failure must not alter or delete an account. This is status reporting, not session-killing or quota enforcement.
 
 Before choosing the exact session detector, validate it on each target distro with: one interactive SSH login, an SSH tunnel with no shell, two concurrent logins for one account, disconnect/reconnect, Dropbear if enabled, and a monitor restart. Compare the displayed count with the actual established sessions. If it cannot reliably count connections, label the UI as approximate and do not describe counts as devices.
 

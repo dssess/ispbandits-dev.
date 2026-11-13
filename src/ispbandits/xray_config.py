@@ -1,4 +1,4 @@
-"""Generate a root-protected Xray VLESS/Trojan TLS configuration.
+"""Generate root-protected Xray VLESS-WebSocket and Trojan-TLS configuration.
 
 Copyright (c) 2026 ISPbandits Dev. All rights reserved.
 
@@ -86,7 +86,7 @@ def _validate_tls(cert_file: Path | str, key_file: Path | str) -> tuple[str, str
 
 
 def build_config(database: Path | str, cert_file: Path | str, key_file: Path | str,
-                 vless_port: int = 443, trojan_port: int = 8443,
+                 vless_port: int = 10001, trojan_port: int = 8443,
                  api_port: int = 10085) -> dict[str, Any]:
     cert, key = _validate_tls(cert_file, key_file)
     for label, port in (("VLESS", vless_port), ("Trojan", trojan_port), ("API", api_port)):
@@ -113,11 +113,10 @@ def build_config(database: Path | str, cert_file: Path | str, key_file: Path | s
             "statsInboundDownlink": True,
         }},
         "inbounds": [
-            {"listen": "0.0.0.0", "port": vless_port, "protocol": "vless",
-             "tag": "vless-tls", "settings": {"users": vless_users, "decryption": "none"},
-             "streamSettings": {**tls, "tlsSettings": {"certificates": [
-                 {"certificateFile": cert, "keyFile": key}
-             ]}}},
+            {"listen": "127.0.0.1", "port": vless_port, "protocol": "vless",
+             "tag": "vless-ws", "settings": {"users": vless_users, "decryption": "none"},
+             "streamSettings": {"network": "ws", "security": "none",
+                                "wsSettings": {"path": "/vless"}}},
             {"listen": "0.0.0.0", "port": trojan_port, "protocol": "trojan",
              "tag": "trojan-tls", "settings": {"users": trojan_users},
              "streamSettings": {**tls, "tlsSettings": {"certificates": [
@@ -189,7 +188,7 @@ def write_config(config: dict[str, Any], output: Path | str) -> Path:
 
 
 def generate(database: Path | str, cert_file: Path | str, key_file: Path | str,
-             output: Path | str, vless_port: int = 443, trojan_port: int = 8443,
+             output: Path | str, vless_port: int = 10001, trojan_port: int = 8443,
              api_port: int = 10085, xray_bin: str | None = None) -> Path:
     config = build_config(database, cert_file, key_file, vless_port, trojan_port, api_port)
     if xray_bin:
