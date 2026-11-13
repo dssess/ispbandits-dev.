@@ -1,5 +1,7 @@
 """Best-effort SSH/Dropbear online presence from Linux process metadata.
 
+Copyright (c) 2026 ISPbandits Dev. All rights reserved.
+
 The count is an observed daemon-process count, not a guaranteed device count.
 """
 from __future__ import annotations

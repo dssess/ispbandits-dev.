@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Atomic Xray + SSH traffic collector for the Nginx Bandit-compatible schema.
 
+Copyright (c) 2026 ISPbandits Dev. All rights reserved.
+
 Xray source:
   `xray api statsquery --server=127.0.0.1:10085`
   Requires Xray StatsService, user stats policies, and a unique Xray user email/tag
   mapped in protocol_accounts.external_identity.
 
 SSH source:
-  A separate, validated SSH network-accounting agent must atomically write a
-  root-readable JSON snapshot to SSH_COUNTER_FILE. Stock OpenSSH/Dropbear do not
-  expose reliable per-account network-byte totals through a simple API. This
-  collector intentionally does NOT substitute /proc/<pid>/io for network bytes.
+  The optional experimental OpenSSH producer atomically writes a root-readable
+  cumulative JSON snapshot to SSH_COUNTER_FILE. Stock OpenSSH/Dropbear do not
+  expose per-account network-byte totals through a simple API. The producer uses
+  a post-auth socket mapping and nftables counters; it is not live-validated and
+  does NOT substitute /proc/<pid>/io for network bytes.
 
 Expected SSH snapshot (cumulative counters, not per-poll deltas):
 {
@@ -29,8 +32,10 @@ Expected SSH snapshot (cumulative counters, not per-poll deltas):
 
 The producer must aggregate counters by protocol account, publish atomically
 (temp file + os.replace), keep generation stable while its cumulative counters
-remain continuous, and change generation only when its counters reset. Run this
-collector once before accepting client traffic to establish initial checkpoints.
+remain continuous, and change generation only when its counters reset. The
+account-create CLI seeds new managed identity checkpoints before disclosing
+credentials. Manually linked identities still need an explicit baseline before
+client traffic is accepted.
 
 All SQLite schema creation, legacy usage migration, counter checkpoint updates,
 traffic total increments, and the compatibility users.data_usage refresh are
@@ -60,7 +65,7 @@ SSH_COUNTER_FILE = Path(
 )
 XRAY_BIN = os.environ.get("XRAY_BIN") or shutil.which("xray") or "/usr/local/bin/xray"
 XRAY_SERVER = os.environ.get("XRAY_API_SERVER", "127.0.0.1:10085")
-XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "xray.service")
+XRAY_SERVICE = os.environ.get("XRAY_SERVICE", "ispbandits-xray.service")
 SSH_MAX_AGE_SECONDS = int(os.environ.get("SSH_COUNTER_MAX_AGE", "180"))
 COMMAND_TIMEOUT_SECONDS = int(os.environ.get("COMMAND_TIMEOUT", "12"))
 
@@ -389,6 +394,71 @@ def load_protocol_maps(conn: sqlite3.Connection) -> Tuple[Dict[Tuple[str, str], 
                 raise CollectorError("Xray stats identity maps to multiple protocol accounts")
             xray_map[identity] = (int(user_id), protocol)
     return ssh_map, xray_map
+
+
+def seed_account_checkpoints(
+    database_path: Path | str,
+    username: str,
+    xray_samples: List[CounterSample],
+    ssh_samples: List[CounterSample],
+    xray_generation_id: Optional[str] = None,
+) -> int:
+    """Seed a just-created account's counters before its credentials are shown.
+
+    Existing checkpoints are never overwritten. Xray stats entries may not
+    exist until the first byte is transferred; in that case, a zero checkpoint
+    at the current Xray generation prevents the first real sample from being
+    lost as a baseline.
+    """
+    path = Path(database_path)
+    conn = sqlite3.connect(str(path), timeout=15, isolation_level=None)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
+    inserted = 0
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        create_schema(conn)
+        user = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if user is None:
+            raise CollectorError("Cannot seed counters for an unknown account")
+        user_id = int(user[0])
+        protocols = conn.execute("""SELECT protocol,external_identity FROM protocol_accounts
+            WHERE user_id=? AND enabled=1""", (user_id,)).fetchall()
+        xray_by_identity = {sample.identity: sample for sample in xray_samples}
+        ssh_by_identity = {(sample.protocol, sample.identity): sample for sample in ssh_samples}
+        for protocol, identity in protocols:
+            protocol, identity = str(protocol), str(identity)
+            if protocol in XRAY_PROTOCOLS:
+                sample = xray_by_identity.get(identity)
+                generation = sample.generation if sample else xray_generation_id
+                if not generation:
+                    raise CollectorError("Cannot seed an Xray account without a current process generation")
+                upload = sample.upload_bytes if sample else 0
+                download = sample.download_bytes if sample else 0
+                source_key = f"xray:{identity}"
+            elif protocol in SSH_PROTOCOLS:
+                sample = ssh_by_identity.get((protocol, identity))
+                if sample is None:
+                    continue
+                generation = sample.generation
+                upload = sample.upload_bytes
+                download = sample.download_bytes
+                source_key = f"ssh:{protocol}:{identity}"
+            else:
+                continue
+            for direction, current in (("upload", upload), ("download", download)):
+                cursor = conn.execute("""INSERT OR IGNORE INTO traffic_checkpoints
+                    (user_id,protocol,source_key,direction,generation,last_counter_bytes,sampled_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (user_id, protocol, source_key, direction, generation, int(current), utc_iso()))
+                inserted += cursor.rowcount
+        conn.commit()
+        return inserted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def apply_one_counter(

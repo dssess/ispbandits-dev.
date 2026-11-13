@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect full ISPbandits Dev traffic and enforce lifetime quotas every five seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Persistent=true
+Unit=ispbandits-ssh-collect.service
+
+[Install]
+WantedBy=timers.target

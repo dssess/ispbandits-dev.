@@ -1,5 +1,7 @@
 """Linux account provisioning for SSH/Dropbear users.
 
+Copyright (c) 2026 ISPbandits Dev. All rights reserved.
+
 Only customer accounts are created. This module never edits sshd_config,
 Dropbear settings, firewall rules, admin accounts, or root authentication.
 """
@@ -103,15 +105,45 @@ def expire_linux_ssh_account(username: str) -> None:
     usermod = shutil.which("usermod")
     if not usermod:
         raise ProvisioningError("usermod was not found")
-    _run([usermod, "-L", username])
+    passwd = shutil.which("passwd")
+    already_locked = False
+    if passwd:
+        status = _run([passwd, "-S", username], check=False)
+        fields = status.stdout.split()
+        already_locked = status.returncode == 0 and len(fields) > 1 and fields[1] in {"L", "LK"}
+    if not already_locked:
+        _run([usermod, "-L", username])
     pkill = shutil.which("pkill")
     if pkill:
         _run([pkill, "-KILL", "-u", username], check=False)
 
 
+def reactivate_linux_ssh_account(username: str, expiry_date: str) -> None:
+    """Unlock a managed SSH account after an administrator raises its quota."""
+    database.validate_username(username)
+    if os.geteuid() != 0:
+        raise PermissionError("Reactivating Linux SSH accounts requires root")
+    try:
+        pwd.getpwnam(username)
+    except KeyError:
+        return
+    try:
+        expiry = dt.date.fromisoformat(expiry_date)
+    except ValueError as exc:
+        raise ValueError("Expiry must be YYYY-MM-DD") from exc
+    if expiry < dt.date.today():
+        raise ValueError("Cannot reactivate an expired Linux account")
+    usermod = shutil.which("usermod")
+    if not usermod:
+        raise ProvisioningError("usermod was not found")
+    _run([usermod, "-e", expiry.isoformat(), username])
+    _run([usermod, "-U", username])
+
+
 def create_managed_account(database_path: Path | str, username: str, expiry_date: str,
                            max_logins: int = 2,
-                           protocols: tuple[str, ...] = ("openssh", "vless", "trojan")) -> dict[str, object]:
+                           protocols: tuple[str, ...] = ("openssh", "vless", "trojan"),
+                           data_limit: int = 0) -> dict[str, object]:
     """Create one account and selected protocol identities with rollback on error."""
     allowed = {"openssh", "dropbear", "vless", "trojan"}
     if not protocols or len(set(protocols)) != len(protocols) or set(protocols) - allowed:
@@ -128,7 +160,7 @@ def create_managed_account(database_path: Path | str, username: str, expiry_date
         linux_created = True
     try:
         ssh_protocols = tuple(p for p in protocols if p in {"openssh", "dropbear"})
-        database.add_user(database_path, username, expiry_date, max_logins, 0, ssh_protocols)
+        database.add_user(database_path, username, expiry_date, max_logins, data_limit, ssh_protocols)
         db_created = True
         for protocol in protocols:
             if protocol in {"vless", "trojan"}:

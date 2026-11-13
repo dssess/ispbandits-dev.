@@ -11,9 +11,9 @@
 <p align="center"><strong>One control plane. A steady pulse.</strong><br />
 SSH · VLESS · Trojan · SQLite</p>
 
-ISPbandits Dev is an early single-VPS management alpha combining Linux SSH account provisioning with Xray VLESS and Trojan identities, SQLite account records, Xray traffic collection, approximate SSH online-process visibility, backups, and expiry processing.
+ISPbandits Dev is an early single-VPS management alpha combining Linux SSH account provisioning with Xray VLESS and Trojan identities, SQLite account records, Xray traffic collection, approximate SSH online-process visibility, backups, expiry processing, and an opt-in experimental OpenSSH traffic meter.
 
-> **Alpha warning:** This software has not yet been validated through a complete live client connection on a production VPS. SSH per-user network-byte metering and quota enforcement are not implemented. Xray collection is enabled in Xray-only mode; do not treat reported SSH usage as measured. Deploy only to a fresh, disposable VPS for testing, not to an existing production server.
+> **Alpha warning:** The OpenSSH per-user meter and shared lifetime quota enforcement are experimental and have not been validated on a live VPS. They are disabled by default; the default full install collects Xray only. The prototype counts per-session IP-layer bytes, not pure SSH payload, and can miss bytes around authentication or exceed a quota between polls. Do not rely on it for production billing or hard data caps. Test only on a fresh, disposable VPS.
 
 ## Contents
 
@@ -24,6 +24,7 @@ ISPbandits Dev is an early single-VPS management alpha combining Linux SSH accou
 - [Install](#install)
 - [Create accounts](#create-accounts)
 - [Monitor and manage](#monitor-and-manage)
+- [Experimental SSH meter and shared quotas](#experimental-ssh-meter-and-shared-quotas)
 - [Back up and restore](#back-up-and-restore)
 - [Development and tests](#development-and-tests)
 - [Current limitations](#current-limitations)
@@ -121,7 +122,7 @@ sudo ispbandits
 sudo ispbandits menu
 ```
 
-An interactive quick install opens this menu when installation completes. It provides account creation, usage totals, approximate online SSH/Dropbear process visibility, managed service status, expiry processing, protected database backups, and a database integrity check. Administrative commands require root; the menu tells you when `sudo` is needed. The ordinary subcommands below remain available for direct use and automation.
+An interactive quick install opens this cyan-framed server dashboard when installation completes. It shows host/OS/uptime, account and measured-traffic summaries, service-state badges, and numbered options for account creation, usage, approximate online SSH/Dropbear process visibility, expiry processing, backups, database verification, and lifetime quota updates. Administrative commands require root; the menu tells you when `sudo` is needed.
 
 Account creation takes a username and required expiry date (`YYYY-MM-DD`). The default protocol set is OpenSSH, VLESS, and Trojan:
 
@@ -129,7 +130,13 @@ Account creation takes a username and required expiry date (`YYYY-MM-DD`). The d
 sudo ispbandits account-create alice --expires 2027-01-01
 ```
 
-The command creates a no-home Linux SSH account and distinct VLESS/Trojan credentials. It prints generated passwords/secrets once; save them securely. Never put them in a ticket, public issue, repository, or shell script. When the managed Xray service is active, new Xray identities are applied to its validated config; otherwise they are stored but will not accept connections until Xray is installed and activated.
+The command creates a no-home Linux SSH account and distinct VLESS/Trojan credentials. When Xray and/or the experimental meter is active, it seeds the new account's traffic checkpoints before disclosing credentials, so the first observed traffic is not discarded as a baseline. It prints generated passwords/secrets once; save them securely. Never put them in a ticket, public issue, repository, or shell script. When the managed Xray service is active, new Xray identities are applied to its validated config; otherwise they are stored but will not accept connections until Xray is installed and activated.
+
+Choose protocols explicitly when needed. `--limit-gb N` sets a shared lifetime cap in decimal GB (1 GB = 1,000,000,000 bytes); `0` means unlimited. A nonzero cap is accepted only while the Xray service and optional experimental meter timer are active, managed OpenSSH mappings are valid, and the meter has published a fresh valid snapshot. Shared quotas support managed OpenSSH, VLESS, and Trojan identities; Dropbear and VMess are unsupported.
+
+```bash
+sudo ispbandits account-create alice --expires 2027-01-01 --limit-gb 50
+```
 
 Choose protocols explicitly when needed:
 
@@ -146,8 +153,7 @@ Supported `--protocols` values are `openssh`, `dropbear`, `vless`, and `trojan`.
 ## Monitor and manage
 
 ```bash
-# Show account-level usage totals. On a full install, Xray usage is collected;
-# SSH bytes are not currently metered.
+# Show account-level usage totals, measured traffic and quota state.
 sudo ispbandits usage
 
 # Show observed SSH/Dropbear daemon processes for managed accounts.
@@ -164,13 +170,28 @@ sudo ispbandits verify
 sudo ispbandits about
 ```
 
-On a full installation, expired accounts are marked expired, Linux SSH passwords are locked and their processes terminated, and expired Xray identities are removed from the generated configuration. If Xray config reconciliation fails, the service is stopped fail-closed. Automatic quota enforcement is disabled.
+On a full installation, expired accounts are marked expired, Linux SSH passwords are locked and their processes terminated, and expired Xray identities are removed from the generated configuration. If Xray config reconciliation fails, the service is stopped fail-closed. The default timer collects Xray traffic only; SSH bytes remain unmeasured unless the separate experimental mode is explicitly installed.
 
-The Xray traffic collector runs every minute in Xray-only mode. To run it manually:
+The default Xray traffic collector runs every minute in Xray-only mode. To run it manually:
 
 ```bash
 sudo ispbandits collect --xray-only
 ```
+
+## Experimental SSH meter and shared quotas
+
+The source includes an opt-in OpenSSH meter. On a **fresh disposable full-install test VPS only**, add `--experimental-ssh-meter` to the normal `install.sh --full` command after reviewing [the metering contract](docs/ssh-meter-contract.md). This requires OpenSSH, nftables, and systemd. It replaces the default Xray-only collector timer with an experimental one-second SSH counter producer and five-second full collector/quota timer. The default installer does not install or enable these units.
+
+The producer correlates authenticated OpenSSH worker UIDs with their socket inodes and counts both directions of each established session using a dedicated nftables counter table. It counts IP-layer bytes, including headers and retransmissions, not pure SSH payload. It fails closed when it sees enabled Dropbear identities or an active managed OpenSSH identity that cannot be mapped. It does not edit firewall verdicts, but it has not yet passed live validation on Ubuntu 22/24 or Debian; an unexpected kernel/OpenSSH layout may prevent attribution.
+
+Quota enforcement sums measured lifetime OpenSSH and Xray traffic across upload and download directions. Imported legacy usage is excluded. When measured traffic reaches the cap, the account is marked `QUOTA_EXCEEDED`, its managed Linux SSH account is locked, and Xray config is rebuilt without that account. A failed Xray reconciliation stops Xray. Use `quota-set` to raise the cap above current usage or set it to zero to reactivate an unexpired account:
+
+```bash
+sudo ispbandits quota-set alice --limit-gb 100
+sudo ispbandits quota-set alice --limit-gb 0   # unlimited
+```
+
+This is not a hard real-time cutoff: the configured polling interval, timer delays, concurrent sessions and in-flight bytes can cause overshoot. Do not use it for billing or production enforcement until you have validated known-byte transfers, IPv4/IPv6, concurrent sessions, restarts, rule flushes, collector failures and quota transitions on each target OS. Automated tests are not a substitute for those live tests.
 
 ## Back up and restore
 
@@ -216,8 +237,8 @@ GitHub Actions runs these checks on Python 3.10–3.13 for pushes, pull requests
 
 ## Current limitations
 
-- SSH per-user network-byte metering is not implemented; `usage` cannot report truthful SSH network traffic.
-- Bandwidth quotas are not enforced.
+- The OpenSSH per-user meter and shared SSH+Xray lifetime quota enforcement are experimental, opt-in, and not live-validated; they are not production-ready or a hard real-time data cap.
+- Dropbear traffic is not supported by the prototype meter; an enabled managed Dropbear identity blocks full metering/quota collection.
 - VMess is not included; supported Xray protocols are VLESS and Trojan.
 - The online SSH view reports approximate process observations, not unique users/devices or guaranteed sessions.
 - Full deployment, TLS renewal, expiry, and client connectivity still need testing on disposable target VPSes across the intended OS releases.

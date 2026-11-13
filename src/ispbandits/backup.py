@@ -1,4 +1,5 @@
 """Online SQLite backup and rollback-safe restore helpers."""
+# © 2026 ISPbandits Dev. All rights reserved.
 from __future__ import annotations
 import hashlib
 import json

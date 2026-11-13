@@ -1,25 +1,27 @@
 # SSH metering integration contract
 
-The collector accepts cumulative per-account network counters from a separate trusted producer at `/run/vpn-ssh-meter/counters.json` (override with `SSH_COUNTER_FILE`). The producer must attribute actual network bytes to an SSH or Dropbear account; `/proc/<pid>/io` is not valid network accounting.
+The collector consumes cumulative per-account network counters from `/run/vpn-ssh-meter/counters.json` by default. A root-owned producer must atomically publish an ISO-8601 timestamp, a generation identifier, and non-negative upload/download byte totals for each protocol identity. The existing collector rejects missing, stale, malformed, unmapped, or regressing samples so an incomplete full collection cannot silently update only part of the account totals.
 
-The file must be owned and protected so only root can read it (no group/world permissions). Write atomically using a temporary file in the same directory followed by `os.replace`. The top-level `sampled_at` must be an ISO-8601 timestamp with timezone and no more than 180 seconds old by default. A `generation` value remains stable while counters are cumulative and must change when the producer resets its counters. Values are non-negative cumulative bytes.
+ISPbandits now includes an **experimental OpenSSH-only producer** in `ispbandits ssh-meter`. It maps enabled managed OpenSSH accounts to system UIDs, looks for authenticated `sshd`/`sshd-session` workers, follows their open socket inode through `/proc/<pid>/fd` to `/proc/net/tcp{,6}`, and installs exact-tuple counter rules in a dedicated `inet ispbandits_meter` nftables table. Those rules count both packet directions and contain no filtering verdicts. The producer does not use nftables `meta skuid` and does not read `/proc/<pid>/io` as a network-byte source.
 
-Example format:
+This is a prototype, not a claim of production-grade accuracy. The process-to-socket mapping has unit coverage but has **not** been validated on the user's VPS or across the supported Ubuntu/Debian OpenSSH builds. It counts IP-layer bytes for the authenticated TCP session, including TCP/IP overhead and retransmissions; it does not measure pure SSH payload. Bytes exchanged before the post-authenticated worker is discoverable can be missed. Dropbear is unsupported; if an enabled Dropbear identity exists, the OpenSSH producer fails closed and shared collection/quota enforcement aborts rather than pretending that identity was counted.
 
-```json
-{
-  "version": 1,
-  "sampled_at": "2026-11-12T14:30:00Z",
-  "counters": [
-    {
-      "protocol": "openssh",
-      "external_identity": "alice",
-      "generation": "agent-start-uuid",
-      "upload_bytes": 1024,
-      "download_bytes": 2048
-    }
-  ]
-}
-```
+The producer stores cumulative totals in `/var/lib/ispbandits-dev/ssh-meter-state.json`, keeps an initialization sentinel beside it, and atomically writes a root-only snapshot. Its generation remains stable while the durable totals continue; corrupt or missing state after initialization aborts rather than silently re-baselining, even if all nft rules have already been pruned. A host reboot or external firewall-table flush can still discard unharvested kernel-counter bytes between samples. A one-second producer timer and five-second full collector timer are provided only for the explicit experimental install mode. These intervals do not create a hard cutoff: quota overshoot can include the collection interval, scheduling delay, concurrent transfers, and bytes already in flight.
 
-Each `(protocol, external_identity)` must already map to an account in `protocol_accounts`. Direction must be measured from the client's perspective and verified with known-byte transfers. A missing or stale snapshot aborts the collector transaction, preventing Xray and SSH totals from getting out of sync silently. Install automatic quota enforcement only after validating this meter against known transfers and disconnect/restart edge cases.
+## Shared lifetime quotas
+
+`users.data_limit` is stored in bytes and `ispbandits account-create --limit-gb N` / `ispbandits quota-set USER --limit-gb N` express it in decimal GB. A nonzero cap is shared across measured managed OpenSSH, VLESS, and Trojan upload/download totals for the account. Dropbear and VMess cannot be included in experimental shared quotas. Imported legacy bytes are shown in usage reports but excluded from enforcement because their source and measurement semantics are not known. `0` means unlimited.
+
+After a full, fresh Xray-plus-SSH collection, `--enforce-quotas` marks an account `QUOTA_EXCEEDED` when measured lifetime bytes reach or exceed the cap. ISPbandits then locks and disconnects its managed Linux SSH sessions and rebuilds the Xray config without that account. If Xray reconciliation fails, Xray is stopped fail-closed. Raising the cap above current measured usage, or setting it to zero, can reactivate a quota-locked account if its expiry date is still valid. This state transition is distinct from normal account expiry.
+
+The default full installer remains Xray-only. A nonzero shared quota is rejected unless the optional SSH-meter timer and managed Xray service are active, the current OpenSSH mappings validate, and a fresh meter snapshot exists. The account-creation CLI seeds a new identity's checkpoint before disclosing its credentials, including a zero Xray checkpoint when StatsService has not emitted a row yet. Manually linked/imported identities still require an intentional baseline before client traffic is allowed. To install the prototype on a **disposable test VPS only**, pass `--experimental-ssh-meter` together with `--full`. Do not enable this on a production VPS until all acceptance checks below pass.
+
+## Required validation before production use
+
+On each target release (Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13), inspect actual post-auth OpenSSH worker PIDs and their socket FDs. Confirm that every managed user's established connection maps to exactly one tuple, that root/admin sessions and unmapped users are excluded, and that reconnects, multiple simultaneous sessions, IPv4, IPv6, and daemon restarts do not mix identities.
+
+Transfer known byte counts in both directions using shell output, SFTP/SCP, and SSH local/remote/dynamic forwarding. Compare ISPbandits totals with packet captures or an independent network counter. Record that the counter includes IP/TCP headers and retransmissions, and measure the maximum quota overshoot during a large transfer and several concurrent sessions. If a supported mode cannot be attributed, it must fail closed or remain unsupported.
+
+Exercise producer restart, host reboot, nftables rule/table flush, missing or stale snapshot, malformed JSON, database rollback, collector failure, and the exact account-disable/re-enable workflow. Confirm that quotas cannot be configured while the meter timer is off, that a failed full collection does not apply partial quota decisions, and that expired accounts are not reactivated by quota changes. The current repository's automated tests cover parser, snapshot, quota-state and counter-delta logic only; they do not replace these live acceptance tests.
+
+See [the external source notes](ssh-meter-research.md) for the OpenSSH, procfs, nftables, and menu-reference links used in this design.

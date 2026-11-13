@@ -26,7 +26,7 @@
 
 “The usage path combines counters from two very different sources. Xray has a per-user StatsService, which gives us cumulative uplink and downlink byte counters. We can map those into upload and download after confirming direction with known-byte transfers.
 
-“SSH is the harder part. Stock OpenSSH and Dropbear do not give us a simple, reliable per-account network-byte counter. Nginx Bandit’s older process-I/O approach can be useful as an estimate of process activity, but it is not a network meter. We will not label it as actual network usage. The current collector expects a separate, validated SSH network-meter producer. Until that exists and passes tests, the SSH usage line is not release-ready, and automatic quota enforcement stays disabled.”
+“SSH is the harder part. We now have an experimental OpenSSH producer that maps authenticated workers to socket inodes and adds per-session nftables counters. It counts IP-layer traffic—not pure SSH payload—and it has not passed live validation on our supported systems. Dropbear is deliberately unsupported and blocks full metering rather than being silently undercounted. Shared lifetime SSH-plus-Xray quotas are implemented but opt-in; the default install still collects Xray only. We will not use these numbers for billing or hard caps until known-byte transfer, restart, concurrency, and failure tests pass.”
 
 ## 4. Explain persistence and recovery
 
@@ -36,19 +36,19 @@
 
 ## 5. Be explicit about the alpha’s current state
 
-“What exists today is more than the schema: we have transactional SQLite migrations and backup/restore, managed Linux SSH-account creation, VLESS/Trojan credentials and config generation, an approximate SSH process view, expiry reconciliation, a full fresh-install mode for Xray, protected TLS refresh, and scheduled Xray-only traffic collection. The local unit tests and foundation installer smoke tests pass, and the Xray config and TLS-refresh hook have been tested in disposable local runs.
+“What exists today is more than the schema: we have transactional SQLite migrations and backup/restore, managed Linux SSH-account creation, VLESS/Trojan credentials and config generation, an approximate SSH process view, expiry reconciliation, a full fresh-install mode for Xray, protected TLS refresh, and scheduled Xray-only traffic collection. The optional OpenSSH producer, combined measured lifetime quotas, and cyan-framed menu are now in code with automated tests for socket parsing, snapshots, quota transitions, and collector deltas. New account checkpoints are seeded before credentials are shown. These tests do not prove live per-user attribution.
 
-“What does not exist yet is equally important: we have not run the full installer on a target OS or proven client connectivity to the new service. We do not install or alter the administrator SSH daemon, we do not change the cloud firewall, and VMess is not included. Xray usage is collected in Xray-only mode; the SSH network-meter producer is still a dependency, so SSH byte usage and all quota enforcement remain off. We have not deployed to either of the existing VPS installations. Deployment is planned for a separate clean VPS after the release gates pass.”
+“What remains unproven is equally important: we have not run this meter or quota mode on a target VPS or proven client connectivity to the new service. We do not install or alter the administrator SSH daemon, we do not change cloud firewall rules, and VMess is not included. The experimental full collector will not apply quota decisions if a fresh SSH snapshot is missing or stale, but timer failure does not turn a polling prototype into a hard network cutoff. We have not deployed this feature to either existing VPS. Live acceptance must happen on a separate disposable VPS.”
 
 ## 6. Agree the next milestones
 
-“Our next work is ordered by risk. First, run the full installer on a disposable VPS and validate TLS, VLESS/Trojan connections, usage deltas, expiry, restarts, and recovery. Validate the SSH process view against interactive logins, tunnels, multiple logins, and disconnects. Then select and implement the SSH network-metering method and validate known-byte transfers across reconnects and restarts. Add the remaining disable/renew/delete workflows and service-aware backup/restore. Only after measurement results are trustworthy should we consider quota enforcement.”
+“Our next work is ordered by risk. First, run the full installer on a disposable VPS and validate TLS, VLESS/Trojan connections, usage deltas, expiry, restarts, and recovery. Then validate the experimental SSH meter against independent counters for known-byte uploads/downloads, IPv4/IPv6, concurrent sessions, forwarding, reconnects, daemon restarts, table flushes, and collector failures on Ubuntu 22.04, Ubuntu 24.04, Debian 12, and Debian 13. Measure quota overshoot and test disable/reactivation for every supported quota protocol. Dropbear and VMess remain outside experimental shared quotas. Add the remaining renew/delete workflows and service-aware backup/restore. Keep the feature opt-in until these release gates pass.”
 
 “Finally, we test clean installs, authentication, port conflicts, restart persistence, and backup/restore on Ubuntu 22.04, Ubuntu 24.04, and Debian. We deploy only to a new clean VPS—not the systems we inspected.”
 
 ## 7. Copyright and alignment questions
 
-“The publisher brand is ISPbandits Dev. We have put an ownership notice in the code and installer and plan to show it in the VPS login message. That helps signal ownership but cannot technically prevent copying. The source should remain in a private GitHub repository when transferred, and the final proprietary license terms should be reviewed before wider distribution.”
+“The publisher brand is ISPbandits Dev. We have put an ownership notice in the code, installer, menu, and VPS login message. That signals ownership but cannot technically prevent copying. The GitHub repository is public by request, while the project declares a proprietary license; public visibility does not grant reuse rights. The license terms should be reviewed before wider distribution.”
 
 “To close, let’s align on four points: the product’s public name; who owns the SSH-metering implementation and acceptance tests; whether VMess belongs in the first public release or stays optional; and who will provision the separate clean test VPS. If we agree on those, we can work through the release gates without risking the current servers.”
 
@@ -56,4 +56,4 @@
 
 ## Presenter’s one-line takeaway
 
-**One account layer, separate SSH and Xray service paths, one durable SQLite record, and no claims of accurate SSH usage until a real network meter proves it.**
+**One account layer, separate SSH and Xray service paths, one durable SQLite record—and an experimental meter that stays opt-in until live evidence proves its accuracy and quota behavior.**

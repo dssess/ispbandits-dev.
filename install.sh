@@ -18,13 +18,14 @@ DOMAIN=""
 TLS_CERT=""
 TLS_KEY=""
 SELF_SIGNED=0
+SSH_METER=0
 
 usage() {
   cat <<'EOF'
 ISPbandits Dev v1 alpha installer
 
 Usage:
-  sudo ./install.sh --full --domain vpn.example.com (--cert-file CERT --key-file KEY | --self-signed)
+  sudo ./install.sh --full --domain vpn.example.com (--cert-file CERT --key-file KEY | --self-signed) [--experimental-ssh-meter]
   sudo ./install.sh --foundation-only [--upgrade] [--prefix PATH] [--db-path PATH]
                     [--bin-dir PATH] [--etc-dir PATH] [--backup-dir PATH]
   ./install.sh --check
@@ -35,6 +36,8 @@ Options:
   --full            Install Xray, VLESS/Trojan listeners, Xray-only usage collection,
                     TLS refresh, and daily account expiry timers. Requires a domain
                     and certificate pair, or explicit --self-signed (testing only).
+  --experimental-ssh-meter  Also install the prototype OpenSSH counter and shared
+                    quota collector. Disabled by default; validate the exact VPS first.
   --foundation-only Install only the CLI/SQLite foundation (development/CI).
   --domain NAME     DNS hostname clients will use; its A/AAAA must point to this VPS.
   --cert-file PATH  TLS certificate chain covering --domain.
@@ -53,8 +56,9 @@ Options:
 Scope:
   --full installs Xray VLESS/Trojan listeners on TCP 443/8443 and a loopback-only
   API. It does not change admin SSH settings or cloud firewall rules. SSH account
-  provisioning is available through `ispbandits account-create`; per-user SSH byte
-  metering and quota enforcement are not yet production-ready.
+  provisioning is available through `ispbandits account-create`. The optional
+  experimental meter counts OpenSSH network bytes, not pure payload bytes; Dropbear
+  is unsupported and quota enforcement requires target-specific validation.
 EOF
 }
 
@@ -64,6 +68,7 @@ while (($#)); do
   case "$1" in
     --upgrade) UPGRADE=1; shift ;;
     --full) FULL=1; shift ;;
+    --experimental-ssh-meter) SSH_METER=1; shift ;;
     --foundation-only) FULL=0; shift ;;
     --domain|--cert-file|--key-file)
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
@@ -91,6 +96,10 @@ while (($#)); do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ "$SSH_METER" == 1 && "$FULL" != 1 ]]; then
+  fail "--experimental-ssh-meter requires --full."
+fi
 
 if [[ "$CHECK_ONLY" != 1 && "$FULL" == 1 ]]; then
   [[ "$UPGRADE" == 0 ]] || fail "--full currently supports fresh installs only; do not upgrade a live proxy with this alpha installer."
@@ -171,6 +180,13 @@ if [[ "$FULL" == 1 ]]; then
     DEBIAN_FRONTEND=noninteractive apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip openssl
   fi
+  if (( SSH_METER )); then
+    command -v sshd >/dev/null 2>&1 || fail "--experimental-ssh-meter requires an installed OpenSSH server (sshd)."
+    if ! command -v nft >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y nftables
+    fi
+  fi
   if (( SELF_SIGNED == 0 )); then
     [[ -r "$TLS_CERT" && -r "$TLS_KEY" ]] || fail "TLS certificate/key files must be readable: $TLS_CERT / $TLS_KEY"
     openssl x509 -in "$TLS_CERT" -noout -checkhost "$DOMAIN" >/dev/null || fail "Certificate does not cover --domain $DOMAIN."
@@ -220,7 +236,11 @@ deploy_xray() {
      ! -e /etc/systemd/system/ispbandits-expire.service &&
      ! -e /etc/systemd/system/ispbandits-expire.timer &&
      ! -e /etc/systemd/system/ispbandits-collect.service &&
-     ! -e /etc/systemd/system/ispbandits-collect.timer ]] || fail "An ISPbandits systemd unit already exists."
+     ! -e /etc/systemd/system/ispbandits-collect.timer &&
+     ! -e /etc/systemd/system/ispbandits-ssh-meter.service &&
+     ! -e /etc/systemd/system/ispbandits-ssh-meter.timer &&
+     ! -e /etc/systemd/system/ispbandits-ssh-collect.service &&
+     ! -e /etc/systemd/system/ispbandits-ssh-collect.timer ]] || fail "An ISPbandits systemd unit already exists."
   [[ ! -e /usr/local/sbin/ispbandits-dev-refresh-tls ]] || fail "TLS refresh executable already exists."
   getent group xray >/dev/null 2>&1 && fail "Group 'xray' already exists; refusing to reuse it."
   id xray >/dev/null 2>&1 && fail "User 'xray' already exists; refusing to reuse it."
@@ -285,6 +305,13 @@ deploy_xray() {
   install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-expire.timer" /etc/systemd/system/ispbandits-expire.timer
   install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-collect.service" /etc/systemd/system/ispbandits-collect.service
   install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-collect.timer" /etc/systemd/system/ispbandits-collect.timer
+  if (( SSH_METER )); then
+    SSH_METER_UNITS_INSTALLED=1
+    install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-ssh-meter.service" /etc/systemd/system/ispbandits-ssh-meter.service
+    install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-ssh-meter.timer" /etc/systemd/system/ispbandits-ssh-meter.timer
+    install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-ssh-collect.service" /etc/systemd/system/ispbandits-ssh-collect.service
+    install -o root -g root -m 0644 "$SOURCE_DIR/systemd/ispbandits-ssh-collect.timer" /etc/systemd/system/ispbandits-ssh-collect.timer
+  fi
   /usr/local/sbin/ispbandits-dev-refresh-tls
   "$WRAPPER" xray-config \
     --cert-file /etc/ispbandits-dev/tls/current/fullchain.pem \
@@ -296,7 +323,15 @@ deploy_xray() {
   systemctl enable --now ispbandits-xray.service
   systemctl enable --now ispbandits-tls-refresh.timer
   systemctl enable --now ispbandits-expire.timer
-  systemctl enable --now ispbandits-collect.timer
+  if (( SSH_METER )); then
+    systemctl disable --now ispbandits-collect.timer >/dev/null 2>&1 || true
+    systemctl start ispbandits-ssh-meter.service
+    "$WRAPPER" collect --enforce-quotas
+    systemctl enable --now ispbandits-ssh-meter.timer ispbandits-ssh-collect.timer
+    systemctl is-active --quiet ispbandits-ssh-meter.timer || fail "Experimental SSH meter timer did not become active."
+  else
+    systemctl enable --now ispbandits-collect.timer
+  fi
   systemctl is-active --quiet ispbandits-xray.service || fail "Managed Xray service did not become active."
   /usr/local/bin/xray api statsquery --server=127.0.0.1:10085 >/dev/null || fail "Xray StatsService health check failed."
   echo "Managed Xray service is active. VLESS: TCP 443; Trojan: TCP 8443; API: loopback only."
@@ -322,6 +357,7 @@ XRAY_USER_CREATED=0
 XRAY_FILES_INSTALLED=0
 XRAY_UNITS_INSTALLED=0
 XRAY_SERVICE_ENABLED=0
+SSH_METER_UNITS_INSTALLED=0
 XRAY_TMP=""
 
 cleanup() {
@@ -330,7 +366,7 @@ cleanup() {
   if [[ -n "$XRAY_TMP" && -d "$XRAY_TMP" ]]; then rm -rf -- "$XRAY_TMP"; fi
   if (( rc != 0 )); then
     if (( XRAY_SERVICE_ENABLED )); then
-      systemctl disable --now ispbandits-tls-refresh.timer ispbandits-expire.timer ispbandits-collect.timer ispbandits-xray.service >/dev/null 2>&1 || true
+      systemctl disable --now ispbandits-tls-refresh.timer ispbandits-expire.timer ispbandits-collect.timer ispbandits-ssh-meter.timer ispbandits-ssh-collect.timer ispbandits-xray.service >/dev/null 2>&1 || true
     fi
     if (( XRAY_UNITS_INSTALLED )); then
       rm -f /etc/systemd/system/ispbandits-xray.service \
@@ -341,6 +377,13 @@ cleanup() {
             /etc/systemd/system/ispbandits-collect.service \
             /etc/systemd/system/ispbandits-collect.timer \
             /usr/local/sbin/ispbandits-dev-refresh-tls
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    if (( SSH_METER_UNITS_INSTALLED )); then
+      rm -f /etc/systemd/system/ispbandits-ssh-meter.service \
+            /etc/systemd/system/ispbandits-ssh-meter.timer \
+            /etc/systemd/system/ispbandits-ssh-collect.service \
+            /etc/systemd/system/ispbandits-ssh-collect.timer
       systemctl daemon-reload >/dev/null 2>&1 || true
     fi
     if (( XRAY_FILES_INSTALLED )); then rm -rf /etc/ispbandits-dev; fi
@@ -439,6 +482,7 @@ managed_by=ISPbandits-Dev-install.sh
 version=0.1.0-alpha
 database_path=$DB_PATH
 full_xray=$FULL
+ssh_meter_experimental=$SSH_METER
 domain=$DOMAIN
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
@@ -456,7 +500,12 @@ echo "Admin menu:  sudo ispbandits"
 echo "Copyright notice: $MOTD"
 if [[ "$FULL" == 1 ]]; then
   echo "Xray:         TCP 443 (VLESS) and TCP 8443 (Trojan); open these in the VPS/cloud firewall if needed."
-  echo "SSH meter:    per-user network-byte accounting is not implemented; quotas remain disabled."
+  if (( SSH_METER )); then
+    echo "SSH meter:    experimental OpenSSH network-byte meter enabled; validate accuracy before production use."
+    echo "Quota scope:  measured lifetime SSH+Xray bytes; legacy usage excluded; Dropbear unsupported."
+  else
+    echo "SSH meter:    disabled by default; shared lifetime quota enforcement is unavailable."
+  fi
 else
   echo "Scope note: no SSH/Dropbear or Xray services were installed or configured."
 fi

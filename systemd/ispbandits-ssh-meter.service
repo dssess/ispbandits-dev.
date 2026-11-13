@@ -1,0 +1,27 @@
+[Unit]
+Description=Experimental ISPbandits Dev OpenSSH per-session network meter
+Documentation=file:/opt/ispbandits-dev/docs/ssh-meter-contract.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ispbandits-dev
+ExecStart=/usr/local/bin/ispbandits --db /var/lib/ispbandits-dev/database.db ssh-meter
+TimeoutStartSec=20
+UMask=0077
+RuntimeDirectory=vpn-ssh-meter
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ispbandits-dev /run/vpn-ssh-meter /run/lock
+ReadOnlyPaths=/etc/ssh
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE

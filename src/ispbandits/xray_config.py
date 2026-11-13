@@ -1,5 +1,7 @@
 """Generate a root-protected Xray VLESS/Trojan TLS configuration.
 
+Copyright (c) 2026 ISPbandits Dev. All rights reserved.
+
 Configuration is assembled from managed database identities. It is never printed
 because it contains Trojan passwords and VLESS UUIDs.
 """

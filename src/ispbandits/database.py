@@ -211,9 +211,102 @@ def list_usage(path: Path | str) -> list[sqlite3.Row]:
             COALESCE(SUM(t.upload_bytes),0) upload_bytes,
             COALESCE(SUM(t.download_bytes),0) download_bytes,
             COALESCE(SUM(t.legacy_bytes),0) legacy_bytes,
+            COALESCE(SUM(t.upload_bytes+t.download_bytes),0) measured_bytes,
+            COALESCE(MAX(u.data_limit),0) data_limit,
             COALESCE(SUM(t.upload_bytes+t.download_bytes+t.legacy_bytes),0) total_bytes
             FROM users u LEFT JOIN traffic_totals t ON t.user_id=u.id
             GROUP BY u.id ORDER BY u.username""").fetchall()
+    finally:
+        conn.close()
+
+
+def enforce_data_quotas(path: Path | str, today: dt.date | None = None) -> list[str]:
+    """Mark active accounts over their shared lifetime quota using measured bytes only.
+
+    Legacy imported usage is intentionally excluded: its measurement source is
+    unknown and it must not cause a new account lockout by itself.
+    """
+    today = today or dt.date.today()
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            rows = conn.execute("""SELECT u.id,u.username,
+                    COALESCE(SUM(t.upload_bytes+t.download_bytes),0) AS measured
+                FROM users u LEFT JOIN traffic_totals t ON t.user_id=u.id
+                WHERE UPPER(COALESCE(u.status,''))='ACTIVE'
+                  AND COALESCE(u.data_limit,0)>0
+                  AND substr(COALESCE(u.expiry_date,''),1,10)>=?
+                GROUP BY u.id
+                HAVING COALESCE(SUM(t.upload_bytes+t.download_bytes),0)>=u.data_limit
+                ORDER BY u.username""", (today.isoformat(),)).fetchall()
+            usernames = []
+            for row in rows:
+                conn.execute("UPDATE users SET status='QUOTA_EXCEEDED' WHERE id=?", (row["id"],))
+                conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
+                    VALUES('quota-exceeded',?,?)""",
+                    (row["id"], f"measured lifetime usage reached {row['measured']} bytes"))
+                usernames.append(str(row["username"]))
+            return usernames
+    finally:
+        conn.close()
+
+
+def set_data_limit(path: Path | str, username: str, limit_bytes: int,
+                   today: dt.date | None = None) -> dict[str, str | int]:
+    """Set a lifetime account quota and report whether account status changed."""
+    validate_username(username)
+    if isinstance(limit_bytes, bool) or not isinstance(limit_bytes, int) or limit_bytes < 0:
+        raise ValueError("Quota must be a non-negative integer number of bytes")
+    today = today or dt.date.today()
+    conn = connect(path)
+    try:
+        with transaction(conn):
+            row = conn.execute("""SELECT id,status,expiry_date FROM users WHERE username=?""",
+                               (username,)).fetchone()
+            if not row:
+                raise ValueError(f"Unknown account: {username}")
+            measured = int(conn.execute("""SELECT COALESCE(SUM(upload_bytes+download_bytes),0)
+                FROM traffic_totals WHERE user_id=?""", (row["id"],)).fetchone()[0])
+            old_status = str(row["status"]).upper()
+            new_status = old_status
+            not_expired = str(row["expiry_date"] or "")[:10] >= today.isoformat()
+            if old_status == "QUOTA_EXCEEDED" and not_expired and (limit_bytes == 0 or measured < limit_bytes):
+                new_status = "ACTIVE"
+            elif old_status == "ACTIVE" and limit_bytes > 0 and measured >= limit_bytes:
+                new_status = "QUOTA_EXCEEDED"
+            conn.execute("UPDATE users SET data_limit=?,status=? WHERE id=?",
+                         (limit_bytes, new_status, row["id"]))
+            conn.execute("""INSERT INTO audit_events(event_type,user_id,detail)
+                VALUES('quota-updated',?,?)""",
+                (row["id"], f"lifetime quota set to {limit_bytes} bytes; status {old_status}->{new_status}"))
+            return {"username": username, "measured_bytes": measured,
+                    "old_status": old_status, "status": new_status,
+                    "expiry_date": str(row["expiry_date"])}
+    finally:
+        conn.close()
+
+
+def list_quota_exceeded_users(path: Path | str) -> list[str]:
+    """Return all quota-locked accounts for idempotent external revocation retries."""
+    conn = connect(path)
+    try:
+        rows = conn.execute("""SELECT username FROM users
+            WHERE UPPER(COALESCE(status,''))='QUOTA_EXCEEDED'
+            ORDER BY username""").fetchall()
+        return [str(row["username"]) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_enabled_protocols(path: Path | str, username: str) -> list[tuple[str, str]]:
+    """Return enabled (protocol, external identity) pairs for one account."""
+    validate_username(username)
+    conn = connect(path)
+    try:
+        rows = conn.execute("""SELECT p.protocol,p.external_identity
+            FROM protocol_accounts p JOIN users u ON u.id=p.user_id
+            WHERE u.username=? AND p.enabled=1 ORDER BY p.protocol""", (username,)).fetchall()
+        return [(str(row["protocol"]), str(row["external_identity"])) for row in rows]
     finally:
         conn.close()
 

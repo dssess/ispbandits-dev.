@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample the experimental ISPbandits Dev OpenSSH meter each second
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=1s
+AccuracySec=200ms
+Persistent=true
+Unit=ispbandits-ssh-meter.service
+
+[Install]
+WantedBy=timers.target

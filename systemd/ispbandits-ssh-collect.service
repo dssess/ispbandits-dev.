@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect full ISPbandits Dev Xray and SSH traffic and enforce quotas
+Requires=ispbandits-ssh-meter.service
+After=ispbandits-ssh-meter.service ispbandits-xray.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/ispbandits-dev
+ExecStart=/usr/local/bin/ispbandits --db /var/lib/ispbandits-dev/database.db collect --enforce-quotas
+TimeoutStartSec=45
+UMask=0077
