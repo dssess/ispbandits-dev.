@@ -113,7 +113,17 @@ This installs the package and initializes a root-protected database, but does no
 
 ## Create accounts
 
-Administrative commands on an installed server require root; use `sudo`. Account creation takes a username and required expiry date (`YYYY-MM-DD`). The default protocol set is OpenSSH, VLESS, and Trojan:
+After installation, run the interactive numbered menu with:
+
+```bash
+sudo ispbandits
+# or explicitly:
+sudo ispbandits menu
+```
+
+An interactive quick install opens this menu when installation completes. It provides account creation, usage totals, approximate online SSH/Dropbear process visibility, managed service status, expiry processing, protected database backups, and a database integrity check. Administrative commands require root; the menu tells you when `sudo` is needed. The ordinary subcommands below remain available for direct use and automation.
+
+Account creation takes a username and required expiry date (`YYYY-MM-DD`). The default protocol set is OpenSSH, VLESS, and Trojan:
 
 ```bash
 sudo ispbandits account-create alice --expires 2027-01-01

@@ -431,7 +431,7 @@ if [[ ! -e "$MOTD" ]]; then
   install -m 0644 /dev/null "$MOTD"
 fi
 if ! grep -Fq '[ISPbandits Dev]' "$MOTD"; then
-  printf '\n[ISPbandits Dev]\n© 2026 ISPbandits Dev. All rights reserved. Proprietary software.\n' >> "$MOTD"
+  printf '\n[ISPbandits Dev]\n© 2026 ISPbandits Dev. All rights reserved. Proprietary software.\nRun sudo ispbandits to open the interactive administration menu.\n' >> "$MOTD"
 fi
 
 cat > "$MARKER" <<EOF
@@ -452,7 +452,7 @@ else
 fi
 echo "Application: $PREFIX"
 echo "Database:    $DB_PATH"
-echo "Admin CLI:   sudo ispbandits --help"
+echo "Admin menu:  sudo ispbandits"
 echo "Copyright notice: $MOTD"
 if [[ "$FULL" == 1 ]]; then
   echo "Xray:         TCP 443 (VLESS) and TCP 8443 (Trojan); open these in the VPS/cloud firewall if needed."

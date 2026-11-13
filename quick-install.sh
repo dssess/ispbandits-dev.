@@ -178,3 +178,7 @@ Open/keep open TCP 443 and 8443 in the provider firewall. With Let's Encrypt,
 keep TCP 80 reachable for automatic certificate renewal. Review the README for
 limitations and management commands.
 EOF
+
+if [[ -t 0 && -x /usr/local/bin/ispbandits ]]; then
+  /usr/local/bin/ispbandits menu
+fi

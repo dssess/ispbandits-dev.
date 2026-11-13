@@ -19,9 +19,10 @@ NOTICE = "© 2026 ISPbandits Dev. All rights reserved. Proprietary software."
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ispbandits", description="ISPbandits Dev VPS management foundation")
+    p = argparse.ArgumentParser(prog="ispbandits", description="ISPbandits Dev VPS management")
     p.add_argument("--db", default=str(database.DEFAULT_DB), help="SQLite path (default: %(default)s)")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command")
+    sub.add_parser("menu", help="open the interactive administration menu")
     sub.add_parser("about", help="show publisher and copyright information")
     sub.add_parser("init", help="initialize or migrate the SQLite database")
     add = sub.add_parser("user-add", help="add a management account record (does not provision a Linux/Xray user yet)")
@@ -71,6 +72,12 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     path = Path(args.db)
+    if args.command is None or args.command == "menu":
+        if args.command is None and not sys.stdin.isatty():
+            parser().print_help()
+            return 2
+        from .menu import run_menu
+        return run_menu(path)
     try:
         if args.command == "about":
             print(f"ISPbandits Dev {NOTICE}")
